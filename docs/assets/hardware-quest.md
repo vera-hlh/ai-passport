@@ -226,7 +226,7 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 
 | Stage | Content | Acceptance |
 | --- | --- | --- |
-| M1 | `power`, home screen, CJK font probe, L12 short deep sleep | wakes on time after 15 s, key aborts it, state and counters correct |
+| M1 | `power`, home screen, CJK font probe, L12 short deep sleep | done: passed on device 2026-11-08, see section 14 |
 | M2 | L1–L5 (display, backlight, keys, I2C, battery) | five levels pass and produce the first report |
 | M3 | L6–L8 (speaker, microphone, loopback) | loopback is recognisable; microphone level above baseline |
 | M4 | L9–L11 (BLE, Wi-Fi, NVS) | phone writes and reads back; counter survives reboot |
@@ -240,3 +240,29 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 4. A full merged-image flash resets NVS: only the latest report is kept and history depends on export, which the UI must state (see 8.1).
 5. Resolved: the product specification and the BSP profile are both 500 mAh; the 520 mAh figure in the handoff document is not used for conversions and that document should be corrected.
 6. Long press versus the deep-sleep guard: sleeping while a key is held wakes the device immediately; both L12 and the focus timer must say so.
+
+## 14. M1 device results (2026-11-08)
+
+Measured on one device (ESP32-C3 rev v1.1, battery 4163 mV / 98%).
+
+| Item | Result |
+| --- | --- |
+| RTC time across deep sleep | **continuous**, so `esp_clk_rtc_time()` can measure real sleep duration |
+| Internal RC error | 15 s requested, 15.39 s measured (**+2.61%**, 26 160 ppm); drift compensation took effect: the second sleep was armed at 15.39 s |
+| Timer wake / key wake | both work, counters increment; refusing to sleep while a key is held works |
+| Wake destination | after sleeping from the self-check level the device returns straight to the level page (product decision, kept) |
+| CW2017 fuel gauge | after wake it stays asleep or reports an implausible SOC (0% at 4.16 V). Added `bsp_battery_recover()`: RESTART/ACTIVE, then validate SOC against a voltage-band floor, rewriting the profile if still inconsistent; recovered to 98% in about 2 s |
+| CJK font | built-in subset covers 27/51; 21 missing characters become the M2 subset input |
+| I2S | the `channel has not been enabled yet` lines before sleep are IDF driver noise; the BSP already treats them as success |
+
+Missing characters (the M2 subset must include them):
+
+```text
+U+724C U+786C U+68C0 U+8304 U+949F U+62A5 U+7761 U+6D4B U+8BD5 U+8BF7
+U+677E U+5F00 U+6309 U+952E U+5524 U+9192 U+8BEF U+8D25 U+65E7 U+6F14 U+9488
+```
+
+Two engineering conclusions follow:
+
+- keep the drift tolerance and clamp as they are: a measured +2.61% shows the ±5% window is right, and a narrower one would reject normal samples;
+- the fuel-gauge recovery belongs in the BSP: any application calling `bsp_battery_sleep()` before deep sleep hits the same state, and `bsp_battery_recover()` should be called unconditionally after initialisation (it returns immediately when readings are sane).
