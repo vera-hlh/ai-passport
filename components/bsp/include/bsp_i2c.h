@@ -4,6 +4,8 @@
 #pragma once
 
 #include "esp_err.h"
+
+#include <stdbool.h>
 #include "driver/i2c_master.h"
 
 // 初始化共享总线。幂等:重复调用直接返回 ESP_OK,可在每个驱动的 init 里放心调。
@@ -15,6 +17,10 @@ i2c_master_bus_handle_t bsp_i2c_bus(void);
 // 扫描 0x08..0x77 并打印所有应答的设备。排查"芯片是不是没焊好/地址对不对"极有用。
 // 直接在正式总线上扫,不要另开临时总线 —— 原因见 bsp_i2c.c 中 bsp_i2c_scan() 的注释。
 esp_err_t bsp_i2c_scan(void);
+
+// 按 7 位地址探测单个设备是否应答。给自检关卡用（0x18 = ES8311，0x63 = CW2017）。
+// 与 bsp_i2c_scan() 一样直接在正式总线上探测，不另开临时总线。
+bool bsp_i2c_probe(uint8_t addr7);
 
 // deep sleep 专用：所有共享外设的最后一笔 I2C 事务完成后，将 SDA/SCL
 // 设为无上下拉的高阻输入。调用后禁止再访问总线，必须立即进入 deep sleep

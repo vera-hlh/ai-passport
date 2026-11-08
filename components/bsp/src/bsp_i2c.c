@@ -79,3 +79,8 @@ esp_err_t bsp_i2c_prepare_deep_sleep(void) {
     ESP_LOGI(TAG, "I2C SDA/SCL 已切换为高阻；外部上拉功耗仍由硬件决定");
     return ESP_OK;
 }
+
+bool bsp_i2c_probe(uint8_t addr7) {
+    if (!s_bus) return false;
+    return i2c_master_probe(s_bus, addr7, 50) == ESP_OK;
+}

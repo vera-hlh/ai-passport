@@ -41,6 +41,37 @@
 #define PQ_TXT_BACK_HINT    "长按返回"
 #define PQ_TXT_NO_MISSING   "无缺字"
 
+
+// 自检关卡（M2）
+#define PQ_TXT_LEVEL_DISPLAY "屏幕测试"
+#define PQ_TXT_LEVEL_BACKLIGHT "背光测试"
+#define PQ_TXT_LEVEL_I2C     "接口扫描"
+#define PQ_TXT_LEVEL_BATTERY "电量计"
+#define PQ_TXT_LEVEL_BUTTON  "按键测试"
+#define PQ_TXT_PENDING       "待测"
+#define PQ_TXT_PASS          "通过"
+#define PQ_TXT_FAIL          "失败"
+#define PQ_TXT_MANUAL        "人工确认"
+#define PQ_TXT_NEXT          "下一个"
+#define PQ_TXT_BRIGHTNESS    "亮度"
+#define PQ_TXT_VOLTAGE       "电压"
+#define PQ_TXT_DEVICES       "设备"
+#define PQ_TXT_ALL_DONE      "全部完成"
+#define PQ_TXT_CLICK_UP      "请单击上键"
+#define PQ_TXT_CLICK_DOWN    "请单击下键"
+#define PQ_TXT_CLICK_OK      "请单击确定"
+#define PQ_TXT_LONG_OK       "请长按确定"
+#define PQ_TXT_RELEASE       "请松开"
+#define PQ_TXT_WHITE         "白色"
+#define PQ_TXT_BLACK         "黑色"
+#define PQ_TXT_RED           "红色"
+#define PQ_TXT_GREEN         "绿色"
+#define PQ_TXT_BLUE          "蓝色"
+#define PQ_TXT_GRAYSCALE     "灰阶"
+#define PQ_TXT_QUEST_REPORT  "自检报告"
+#define PQ_TXT_RETEST        "确定重测"
+#define PQ_TXT_UNMEASURED_ERR "读数不可信"
+
 static const char *const PQ_UI_STRINGS[] = {
     PQ_TXT_HOME_TITLE, PQ_TXT_BATTERY, PQ_TXT_WAKE_COUNT, PQ_TXT_LAST_SLEEP,
     PQ_TXT_SELF_CHECK, PQ_TXT_FOCUS, PQ_TXT_REPORT, PQ_TXT_LEGACY,
@@ -49,6 +80,12 @@ static const char *const PQ_UI_STRINGS[] = {
     PQ_TXT_RELEASE_KEY, PQ_TXT_ERROR, PQ_TXT_WAKE, PQ_TXT_SLEPT,
     PQ_TXT_NO_PREVIOUS, PQ_TXT_UNMEASURED, PQ_TXT_SLEEP_FAILED, PQ_TXT_QUEST_HINT,
     PQ_TXT_COVERAGE, PQ_TXT_MISSING, PQ_TXT_FONT_SAMPLE, PQ_TXT_BACK_HINT, PQ_TXT_NO_MISSING,
+    PQ_TXT_LEVEL_DISPLAY, PQ_TXT_LEVEL_BACKLIGHT, PQ_TXT_LEVEL_I2C, PQ_TXT_LEVEL_BATTERY,
+    PQ_TXT_LEVEL_BUTTON, PQ_TXT_PENDING, PQ_TXT_PASS, PQ_TXT_FAIL, PQ_TXT_MANUAL,
+    PQ_TXT_NEXT, PQ_TXT_BRIGHTNESS, PQ_TXT_VOLTAGE, PQ_TXT_DEVICES, PQ_TXT_ALL_DONE,
+    PQ_TXT_CLICK_UP, PQ_TXT_CLICK_DOWN, PQ_TXT_CLICK_OK, PQ_TXT_LONG_OK, PQ_TXT_RELEASE,
+    PQ_TXT_WHITE, PQ_TXT_BLACK, PQ_TXT_RED, PQ_TXT_GREEN, PQ_TXT_BLUE, PQ_TXT_GRAYSCALE,
+    PQ_TXT_QUEST_REPORT, PQ_TXT_RETEST, PQ_TXT_UNMEASURED_ERR,
 };
 
 #define PQ_UI_STRING_COUNT (sizeof(PQ_UI_STRINGS) / sizeof(PQ_UI_STRINGS[0]))

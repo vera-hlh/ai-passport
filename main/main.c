@@ -319,8 +319,8 @@ void app_main(void) {
     if (bsp_lvgl_lock(1000)) {
         const pq_power_info_t *power = pq_power_info();
         if (power->restored && power->mode == 1) {
-            // 从自检关卡的深睡醒来：直接回到关卡页，第一眼就能看到实测结果。
-            quest_open();
+            // 从自检关卡的深睡醒来：直接回到 L12 关卡页，第一眼就能看到实测结果。
+            quest_open_last_sleep();
         } else {
             app_home_open();
         }
