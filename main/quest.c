@@ -516,7 +516,15 @@ static const uint32_t L12_DURATIONS_S[3] = { 10, 15, 30 };
 static lv_obj_t *s_l12_duration;
 static lv_obj_t *s_l12_result;
 static lv_obj_t *s_l12_detail;
-static int s_l12_index = 1;
+// 档位也放 RTC 内存：深睡会复位芯片，若存在普通 RAM 里，醒来后必然掉回默认档。
+// 0 = 10 秒，正好也是首次进入的默认值，所以不需要额外的“未初始化”哨兵。
+static RTC_DATA_ATTR uint8_t s_l12_index_rtc;
+static int s_l12_index;
+
+static void l12_load_index(void)
+{
+    s_l12_index = s_l12_index_rtc < 3 ? (int)s_l12_index_rtc : 0;
+}
 
 static void l12_refresh_duration(void)
 {
@@ -592,6 +600,7 @@ static void l12_record_if_fresh(void)
 
 static void l12_enter(void)
 {
+    l12_load_index();
     l12_record_if_fresh();
     s_page = pq_ui_page_create(PQ_TXT_DEEP_SLEEP);
     pq_ui_text(s_page, "L12", 14, 40, &pq_font_16, PQ_COLOR_MUTED);
@@ -625,9 +634,11 @@ static void l12_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     if (ev != BSP_BTN_CLICK) return;
     if (btn == BSP_BTN_UP) {
         s_l12_index = (s_l12_index + 2) % 3;
+        s_l12_index_rtc = (uint8_t)s_l12_index;
         l12_refresh_duration();
     } else if (btn == BSP_BTN_DOWN) {
         s_l12_index = (s_l12_index + 1) % 3;
+        s_l12_index_rtc = (uint8_t)s_l12_index;
         l12_refresh_duration();
     } else if (btn == BSP_BTN_OK) {
         if (pq_power_key_held()) {
