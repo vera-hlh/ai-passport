@@ -1,17 +1,16 @@
-// main/font_probe.c —— 中文字体探针（M1）。
+// main/font_probe.c —— 中文字体自检页。
 //
-// 目的有两个：
-//   1. 证明 LVGL 内置的 Source Han Sans SC 16 CJK 子集能在本板上真正画出汉字
-//      （默认的 Montserrat 14/20 一个汉字都没有，UTF-8 编译通过并不代表能显示）。
-//   2. 把计划中的界面文案逐字对照该字体的 cmap，列出缺字 —— 这份缺字清单就是
-//      M2 生成自有字体子集时的字符输入，避免“上线才发现豆腐块”。
+// 两个用途：
+//   1. 用生成的两套字号真渲染中文，肉眼确认不是方块/错位；
+//   2. 把 main/ui_strings.h 的每个字逐码点对照 cmap，列出缺字——
+//      缺字清单就是“该补字符集了”的信号，正常情况下应为 0。
 #include "font_probe.h"
 
 #include "app_home.h"
-#include "pq_fonts.h"
-#include "ui_strings.h"
 #include "bsp_display.h"
+#include "pq_fonts.h"
 #include "pq_ui.h"
+#include "ui_strings.h"
 
 #include "esp_log.h"
 #include "lvgl.h"
@@ -21,10 +20,6 @@
 
 static const char *TAG = "pq_font";
 
-// 计划中的界面文案来自 main/ui_strings.h（字体覆盖检查的唯一输入）。
-static const char *const *const PLANNED_TEXT = PQ_UI_STRINGS;
-
-#define PLANNED_COUNT PQ_UI_STRING_COUNT
 #define MISSING_MAX 12
 
 static lv_obj_t *s_page;
@@ -79,8 +74,8 @@ static void check_coverage(coverage_t *out)
     out->total = 0;
     out->missing = 0;
 
-    for (size_t i = 0; i < PLANNED_COUNT; i++) {
-        const char *cursor = PLANNED_TEXT[i];
+    for (size_t i = 0; i < PQ_UI_STRING_COUNT; i++) {
+        const char *cursor = PQ_UI_STRINGS[i];
         uint32_t cp;
         while ((cp = utf8_next(&cursor)) != 0) {
             out->total++;
@@ -88,7 +83,7 @@ static void check_coverage(coverage_t *out)
             if (!lv_font_get_glyph_dsc(&pq_font_16, &dsc, cp, 0)) {
                 if (out->missing < MISSING_MAX) out->missing_cp[out->missing] = cp;
                 out->missing++;
-                ESP_LOGW(TAG, "缺字 U+%04X（文案 \"%s\"）", (unsigned)cp, PLANNED_TEXT[i]);
+                ESP_LOGW(TAG, "缺字 U+%04X（文案 \"%s\"）", (unsigned)cp, PQ_UI_STRINGS[i]);
             }
         }
     }
@@ -102,9 +97,11 @@ static void refresh(void)
     check_coverage(&coverage);
 
     if (s_coverage_label) {
-        lv_label_set_text_fmt(s_coverage_label, "COVERED %lu / %lu",
-                              (unsigned long)(coverage.total - coverage.missing),
-                              (unsigned long)coverage.total);
+        char text[48];
+        snprintf(text, sizeof text, "%s %lu / %lu", PQ_TXT_COVERAGE,
+                 (unsigned long)(coverage.total - coverage.missing),
+                 (unsigned long)coverage.total);
+        lv_label_set_text(s_coverage_label, text);
         lv_obj_set_style_text_color(
             s_coverage_label,
             lv_color_hex(coverage.missing == 0 ? PQ_COLOR_OK : PQ_COLOR_WARN), 0);
@@ -112,11 +109,10 @@ static void refresh(void)
 
     if (s_missing_label) {
         if (coverage.missing == 0) {
-            lv_label_set_text(s_missing_label, "no missing glyphs");
+            lv_label_set_text(s_missing_label, PQ_TXT_NO_MISSING);
         } else {
             char buf[128];
-            size_t used = 0;
-            used += (size_t)snprintf(buf + used, sizeof buf - used, "MISSING ");
+            size_t used = (size_t)snprintf(buf, sizeof buf, "%s ", PQ_TXT_MISSING);
             for (uint32_t i = 0; i < coverage.missing && i < MISSING_MAX; i++) {
                 used += (size_t)snprintf(buf + used, sizeof buf - used, "%sU+%04X",
                                          i == 0 ? "" : " ", (unsigned)coverage.missing_cp[i]);
@@ -130,27 +126,28 @@ static void refresh(void)
 void font_probe_open(void)
 {
     s_active = true;
-    s_page = pq_ui_page_create("FONT PROBE");
+    s_page = pq_ui_page_create(PQ_TXT_FONT_PROBE);
 
-    pq_ui_text(s_page, "built-in Source Han Sans SC 16 CJK", 14, 36,
-               &lv_font_montserrat_14, PQ_COLOR_MUTED);
+    pq_ui_text(s_page, PQ_TXT_HOME_TITLE, 14, 44, &pq_font_20, PQ_COLOR_INK);
+    pq_ui_text(s_page, PQ_TXT_FONT_SAMPLE, 14, 80, &pq_font_16, PQ_COLOR_INK);
 
-    // 真正拿 CJK 字体画几行，肉眼确认不是豆腐块。
-    for (size_t i = 0; i < 3 && i < PLANNED_COUNT; i++) {
-        lv_obj_t *sample = pq_ui_text(s_page, PLANNED_TEXT[i], 14,
-                                      64 + (int)i * 26,
-                                      &pq_font_16, PQ_COLOR_INK);
-        (void)sample;
-    }
+    char row[96];
+    snprintf(row, sizeof row, "%s %s %s", PQ_TXT_SELF_CHECK, PQ_TXT_FOCUS, PQ_TXT_REPORT);
+    pq_ui_text(s_page, row, 14, 110, &pq_font_16, PQ_COLOR_MUTED);
 
-    s_coverage_label = pq_ui_text(s_page, "", 14, 152, &lv_font_montserrat_14,
-                                  PQ_COLOR_ACCENT);
-    s_missing_label = pq_ui_text(s_page, "", 14, 174, &lv_font_montserrat_14,
-                                 PQ_COLOR_MUTED);
-    lv_obj_set_width(s_missing_label, 216);
+    snprintf(row, sizeof row, "%s %s %s", PQ_TXT_DEEP_SLEEP, PQ_TXT_SLEEPING, PQ_TXT_WAKE);
+    pq_ui_text(s_page, row, 14, 138, &pq_font_16, PQ_COLOR_MUTED);
+
+    s_coverage_label = pq_ui_text(s_page, "", 14, 178, &pq_font_16, PQ_COLOR_ACCENT);
+    s_missing_label = pq_ui_text(s_page, "", 14, 204, &pq_font_16, PQ_COLOR_MUTED);
+    lv_obj_set_width(s_missing_label, 212);
     lv_label_set_long_mode(s_missing_label, LV_LABEL_LONG_WRAP);
 
-    pq_ui_hint(s_page, "LONG OK  BACK");
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 288, &pq_font_16,
+                                PQ_COLOR_MUTED);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+
     refresh();
     ESP_LOGI(TAG, "字体探针页已建立");
 }

@@ -6,8 +6,10 @@
 
 #include "app_home.h"
 #include "bsp_display.h"
+#include "pq_fonts.h"
 #include "pq_ui.h"
 #include "power.h"
+#include "ui_strings.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -38,8 +40,19 @@ static void set_notice(const char *text)
 static void refresh_duration(void)
 {
     if (!s_duration_label) return;
-    lv_label_set_text_fmt(s_duration_label, "DURATION  %lu s",
-                          (unsigned long)DURATIONS_S[s_duration_index]);
+    char text[32];
+    snprintf(text, sizeof text, "%s %lu %s", PQ_TXT_DURATION,
+             (unsigned long)DURATIONS_S[s_duration_index], PQ_TXT_SECONDS);
+    lv_label_set_text(s_duration_label, text);
+}
+
+static const char *wake_name(pq_wake_t wake)
+{
+    switch (wake) {
+        case PQ_WAKE_TIMER: return PQ_TXT_TIMER;
+        case PQ_WAKE_KEY: return PQ_TXT_KEY;
+        default: return "--";
+    }
 }
 
 // 把上一次睡眠的结果写进页面。这是 L12 的“判据展示”部分。
@@ -49,60 +62,62 @@ static void refresh_result(void)
     const pq_power_info_t *info = pq_power_info();
 
     if (!info->restored) {
-        lv_label_set_text(s_result_label, "NO PREVIOUS RUN");
-        lv_label_set_text(s_detail_label, "OK starts the first 15 s sleep");
+        lv_label_set_text(s_result_label, PQ_TXT_NO_PREVIOUS);
+        lv_label_set_text(s_detail_label, "");
         return;
     }
 
+    char text[96];
     if (info->last.valid) {
+        snprintf(text, sizeof text, "%s %.2fs / %.2fs", PQ_TXT_SLEPT,
+                 (double)info->last.measured_us / 1000000.0,
+                 (double)info->last.requested_us / 1000000.0);
+        lv_label_set_text(s_result_label, text);
+
         char percent[16];
         pq_ui_format_ppm(percent, sizeof percent, info->last.error_ppm);
-        lv_label_set_text_fmt(s_result_label, "SLEPT  %.2f s / %.2f s",
-                              (double)info->last.measured_us / 1000000.0,
-                              (double)info->last.requested_us / 1000000.0);
-        lv_label_set_text_fmt(s_detail_label, "ERROR %s  WAKE %s  #%lu",
-                              percent,
-                              info->wake == PQ_WAKE_TIMER ? "TIMER" :
-                              info->wake == PQ_WAKE_KEY ? "KEY" : "-",
-                              (unsigned long)info->count);
+        snprintf(text, sizeof text, "%s %s   %s   %lu", PQ_TXT_ERROR, percent,
+                 wake_name(info->wake), (unsigned long)info->count);
+        lv_label_set_text(s_detail_label, text);
     } else {
-        lv_label_set_text(s_result_label, "DURATION UNMEASURED");
-        lv_label_set_text_fmt(s_detail_label, "RTC clock not continuous   WAKE %s   #%lu",
-                              info->wake == PQ_WAKE_TIMER ? "TIMER" :
-                              info->wake == PQ_WAKE_KEY ? "KEY" : "-",
-                              (unsigned long)info->count);
+        lv_label_set_text(s_result_label, PQ_TXT_UNMEASURED);
+        snprintf(text, sizeof text, "%s   %lu", wake_name(info->wake),
+                 (unsigned long)info->count);
+        lv_label_set_text(s_detail_label, text);
     }
 }
 
 void quest_open(void)
 {
     s_active = true;
-    s_page = pq_ui_page_create("SELF-CHECK");
+    s_page = pq_ui_page_create(PQ_TXT_DEEP_SLEEP);
 
-    pq_ui_text(s_page, "L12  DEEP SLEEP", 14, 40, &lv_font_montserrat_14, PQ_COLOR_MUTED);
+    pq_ui_text(s_page, "L12", 14, 40, &pq_font_16, PQ_COLOR_MUTED);
 
     lv_obj_t *panel = lv_obj_create(s_page);
-    lv_obj_set_size(panel, 216, 54);
-    lv_obj_set_pos(panel, 12, 66);
+    lv_obj_set_size(panel, 216, 58);
+    lv_obj_set_pos(panel, 12, 68);
     lv_obj_set_style_bg_color(panel, lv_color_hex(PQ_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, 10, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
-    lv_obj_set_style_pad_all(panel, 8, 0);
+    lv_obj_set_style_pad_all(panel, 4, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_duration_label = pq_ui_text(panel, "", 4, 2, &lv_font_montserrat_20, PQ_COLOR_ACCENT);
-    pq_ui_text(panel, "UP/DN changes   OK sleeps", 4, 30, &lv_font_montserrat_14,
-               PQ_COLOR_MUTED);
+    s_duration_label = pq_ui_text(panel, "", 4, 2, &pq_font_20, PQ_COLOR_ACCENT);
     refresh_duration();
 
-    s_result_label = pq_ui_text(s_page, "", 14, 136, &lv_font_montserrat_14, PQ_COLOR_INK);
-    s_detail_label = pq_ui_text(s_page, "", 14, 158, &lv_font_montserrat_14, PQ_COLOR_MUTED);
+    s_result_label = pq_ui_text(s_page, "", 14, 140, &pq_font_16, PQ_COLOR_INK);
+    s_detail_label = pq_ui_text(s_page, "", 14, 166, &pq_font_16, PQ_COLOR_MUTED);
     refresh_result();
 
-    s_notice = pq_ui_text(s_page, "", 14, 186, &lv_font_montserrat_14, PQ_COLOR_WARN);
+    s_notice = pq_ui_text(s_page, "", 14, 200, &pq_font_16, PQ_COLOR_WARN);
 
-    pq_ui_hint(s_page, "OK  SLEEP     LONG OK  BACK");
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_QUEST_HINT, 0, 288, &pq_font_16,
+                                PQ_COLOR_MUTED);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+
     ESP_LOGI(TAG, "自检页已建立");
 }
 
@@ -142,13 +157,13 @@ void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         set_notice("");
     } else if (btn == BSP_BTN_OK) {
         if (pq_power_key_held()) {
-            set_notice("RELEASE THE KEY FIRST");
+            set_notice(PQ_TXT_RELEASE_KEY);
             bsp_lvgl_unlock();
             return;
         }
         const uint64_t requested_us = (uint64_t)DURATIONS_S[s_duration_index] * 1000000ULL;
-        lv_obj_t *label = s_result_label;
-        if (label) lv_label_set_text(label, "SLEEPING...");
+        if (s_result_label) lv_label_set_text(s_result_label, PQ_TXT_SLEEPING);
+        if (s_detail_label) lv_label_set_text(s_detail_label, "");
         bsp_lvgl_unlock();
 
         // 先让这一帧画出来，再入睡；这段时间里按键仍由驱动持有。
@@ -159,8 +174,8 @@ void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         ESP_LOGE(TAG, "入睡失败: %s", esp_err_to_name(err));
         if (bsp_lvgl_lock(300)) {
             refresh_result();
-            set_notice(err == ESP_ERR_INVALID_STATE ? "KEY HELD, SLEEP REFUSED"
-                                                    : "SLEEP FAILED, SEE LOG");
+            set_notice(err == ESP_ERR_INVALID_STATE ? PQ_TXT_RELEASE_KEY
+                                                    : PQ_TXT_SLEEP_FAILED);
             bsp_lvgl_unlock();
         }
         // 上面已经成对地解锁并自行重新加锁，不能再落到函数末尾的那次解锁。

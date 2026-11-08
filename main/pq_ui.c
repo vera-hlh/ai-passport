@@ -1,6 +1,8 @@
 // main/pq_ui.c —— 页面、文字与选中行的最小实现，见 pq_ui.h。
 #include "pq_ui.h"
 
+#include "pq_fonts.h"
+
 #include <stdio.h>
 
 lv_obj_t *pq_ui_page_create(const char *title)
@@ -19,7 +21,7 @@ lv_obj_t *pq_ui_page_create(const char *title)
 
     if (title) {
         lv_obj_t *label = lv_label_create(page);
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(label, &pq_font_20, 0);
         lv_obj_set_style_text_color(label, lv_color_hex(PQ_COLOR_ACCENT), 0);
         lv_label_set_text(label, title);
         lv_obj_set_pos(label, 14, 10);
@@ -38,7 +40,7 @@ void pq_ui_hint(lv_obj_t *page, const char *text)
 {
     if (!page) return;
     lv_obj_t *label = lv_label_create(page);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, &pq_font_16, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(PQ_COLOR_MUTED), 0);
     lv_obj_set_width(label, LV_PCT(92));
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
@@ -51,7 +53,7 @@ lv_obj_t *pq_ui_text(lv_obj_t *page, const char *text, int x, int y,
 {
     if (!page) return NULL;
     lv_obj_t *label = lv_label_create(page);
-    lv_obj_set_style_text_font(label, font ? font : &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, font ? font : &pq_font_16, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_label_set_text(label, text ? text : "");
     lv_obj_set_pos(label, x, y);
