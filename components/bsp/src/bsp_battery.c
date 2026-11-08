@@ -55,6 +55,15 @@ static esp_err_t cw_write(uint8_t reg, uint8_t val) {
     return i2c_master_transmit(s_dev, b, 2, 100);
 }
 
+// 14 bit VCELL，单位 312.5 µV，换算成 mV。睡眠态的芯片会返回 0。
+static int cw_voltage_mv(int *mv) {
+    uint8_t b[2] = { 0 };
+    if (cw_read(CW_REG_VCELL_H, b, 2) != 0) return -1;
+    const uint32_t raw = (((uint32_t)b[0] << 8) | b[1]) & 0x3FFF;
+    *mv = (int)((raw * 3125) / 10000);
+    return 0;
+}
+
 // CONFIG 的低 4 bit 为保留位。复位、睡眠和激活均按芯片规定的时序切换。
 static int cw_enter_sleep(void) {
     if (cw_write(CW_REG_CONFIG, CW_CONFIG_RESTART) != 0) return -1;
@@ -226,8 +235,84 @@ int bsp_battery_soc(void) {
 }
 
 int bsp_battery_mv(void) {
-    uint8_t b[2] = { 0 };
-    if (cw_read(CW_REG_VCELL_H, b, 2) != 0) return -1;
-    uint32_t raw = ((uint32_t)b[0] << 8 | b[1]) & 0x3FFF;   // 14bit
-    return (int)((raw * 3125) / 10000);                     // raw * 312.5uV → mV
+    int mv = 0;
+    if (cw_voltage_mv(&mv) != 0) return -1;
+    return mv;
+}
+
+// 深睡唤醒后的补救路径，见 bsp_battery.h 的说明。
+//
+// 实测到的两种坏状态：
+//   1. 芯片还停在睡眠态：CONFIG 读回像 0x00，但 VCELL/SOC 都是 0；
+//   2. 芯片醒了、电压也对了，但 SOC 仍是 0（profile 丢失后不再参与计算）。
+// 所以“可信”不能只看 SOC ≤ 100，还要看 SOC 与电压是否自洽：
+// 4.16 V 的锂电不可能是 0%，遇到这种情况要按首次上电的完整流程重写 profile。
+static bool cw_soc_plausible(int mv, int soc) {
+    if (mv >= 4150) return soc >= 70;
+    if (mv >= 4050) return soc >= 50;
+    if (mv >= 3950) return soc >= 30;
+    if (mv >= 3850) return soc >= 15;
+    if (mv >= 3700) return soc >= 5;
+    if (mv >= 3400) return soc >= 1;
+    return soc >= 0;          // 3.4 V 以下任何非负 SOC 都接受
+}
+
+static bool cw_reading_plausible(int *mv_out, int *soc_out) {
+    uint8_t soc = 0;
+    int mv = 0;
+    if (cw_read(CW_REG_SOC_H, &soc, 1) != 0) return false;
+    if (cw_voltage_mv(&mv) != 0) return false;
+    if (mv < 2500 || mv > 4500) return false;
+    if (soc > 100) return false;
+    if (!cw_soc_plausible(mv, (int)soc)) return false;
+    if (mv_out) *mv_out = mv;
+    if (soc_out) *soc_out = (int)soc;
+    return true;
+}
+
+static bool cw_wait_plausible(int polls, int *mv_out, int *soc_out) {
+    for (int poll = 0; poll < polls; poll++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (cw_reading_plausible(mv_out, soc_out)) return true;
+    }
+    return false;
+}
+
+esp_err_t bsp_battery_recover(void) {
+    if (!s_dev) {
+        esp_err_t init_error = bsp_battery_init();
+        if (init_error != ESP_OK) return init_error;
+    }
+
+    int mv = 0;
+    int soc = 0;
+    if (cw_reading_plausible(&mv, &soc)) return ESP_OK;   // 本来就正常，立刻返回
+
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        esp_err_t e = cw_write(CW_REG_CONFIG, CW_CONFIG_RESTART);
+        if (e != ESP_OK) return e;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        e = cw_write(CW_REG_CONFIG, CW_CONFIG_ACTIVE);
+        if (e != ESP_OK) return e;
+        if (cw_wait_plausible(20, &mv, &soc)) {
+            ESP_LOGI(TAG, "电量计已唤醒: SOC=%d%% %d mV", soc, mv);
+            return ESP_OK;
+        }
+
+        // 纯唤醒不够（SOC 与电压不自洽）：按首次上电的流程重写 profile，
+        // 让芯片用完整参数重新计算 SOC。
+        ESP_LOGW(TAG, "电量计 SOC=%d%% @ %d mV 不自洽(第 %d 次)，重写 profile",
+                 soc, mv, attempt);
+        if (cw_update_profile() != 0) {
+            ESP_LOGE(TAG, "重写电池 profile 失败");
+            return ESP_FAIL;
+        }
+        if (cw_wait_plausible(30, &mv, &soc)) {
+            ESP_LOGI(TAG, "电量计已恢复: SOC=%d%% %d mV", soc, mv);
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGE(TAG, "电量计连续两次未能恢复，电量读数不可信");
+    return ESP_ERR_TIMEOUT;
 }

@@ -304,6 +304,14 @@ void app_main(void) {
     }
     s_ok[2] = (bsp_audio_init() == ESP_OK);
     s_ok[3] = (bsp_battery_init() == ESP_OK);
+    if (s_ok[3]) {
+        // 深睡唤醒后 CW2017 可能还睡着，或 awake 但 SOC 与电压不自洽
+        // （4.16 V 显示 0%）。recover() 在读数正常时立即返回，可以无条件调用。
+        esp_err_t battery_error = bsp_battery_recover();
+        if (battery_error != ESP_OK) {
+            ESP_LOGE(TAG, "电量计读数不可信: %s", esp_err_to_name(battery_error));
+        }
+    }
     s_ok[4] = true;                                    // 页面内按需初始化并显示错误
     s_ok[5] = true;
     s_ok[6] = true;

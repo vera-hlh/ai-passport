@@ -13,6 +13,17 @@ esp_err_t bsp_battery_init(void);
 // sleep 前的终端操作；芯片未初始化时视为无需处理并返回成功。
 esp_err_t bsp_battery_sleep(void);
 
+// 确保电量读数可信；读数本来就正常时立即返回，因此可以在初始化后无条件调用。
+//
+// 为什么需要单独一步：芯片在 bsp_battery_sleep() 之后会一直睡着，MCU 复位
+// 并不会叫醒它；而 bsp_battery_init() 的就绪判据是“SOC ≤ 100”，睡眠态的
+// 0% / 0 mV 恰好满足，于是初始化看起来成功、读数却全是 0。
+// 实测还遇到第二种坏状态：芯片醒了、电压也对（4.16 V），但 SOC 仍是 0%
+// （profile 不再参与计算）。因此本函数按“电压区间对应的 SOC 下限”判断自洽，
+// 自洽检查失败时先 RESTART/ACTIVE 唤醒，仍不自洽就按首次上电流程重写 profile。
+// 芯片未初始化时会先调用 bsp_battery_init()。
+esp_err_t bsp_battery_recover(void);
+
 // 剩余电量百分比 0..100;读失败返回 -1。
 int bsp_battery_soc(void);
 
