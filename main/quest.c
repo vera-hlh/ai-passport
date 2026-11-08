@@ -423,6 +423,7 @@ static const int BTN_WINDOWS[BSP_BTN_COUNT][2] = BSP_BTN_MV_TABLE;
 static lv_obj_t *s_l5_prompt;
 static lv_obj_t *s_l5_mv;
 static int s_l5_step;
+static int s_l5_press_mv = -1;
 
 static void l5_show(void)
 {
@@ -430,7 +431,7 @@ static void l5_show(void)
         lv_label_set_text(s_l5_prompt, L5_STEPS[s_l5_step].prompt);
     }
     if (s_l5_mv) {
-        const int mv = bsp_button_read_mv();
+        const int mv = s_l5_press_mv >= 0 ? s_l5_press_mv : bsp_button_read_mv();
         char text[32];
         snprintf(text, sizeof text, "%s %d mV", PQ_TXT_VOLTAGE, mv);
         lv_label_set_text(s_l5_mv, text);
@@ -447,6 +448,13 @@ static void l5_enter(void)
 
 static void l5_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
+    // 单击是“按下再抬起”，事件到达时键已经松开、ADC 回到松开电压。
+    // 所以电压必须在 PRESS 事件里采样，单击/长按只负责比对事件类型。
+    if (ev == BSP_BTN_PRESS) {
+        s_l5_press_mv = bsp_button_read_mv();
+        l5_show();
+        return;
+    }
     if (ev == BSP_BTN_RELEASE) {
         l5_show();
         return;
@@ -465,7 +473,7 @@ static void l5_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         finish(L5_INDEX, QS_FAIL, "%s", PQ_TXT_FAIL);
         return;
     }
-    const int mv = bsp_button_read_mv();
+    const int mv = s_l5_press_mv;
     if (mv < 0 || mv < BTN_WINDOWS[btn][0] || mv > BTN_WINDOWS[btn][1]) {
         finish(L5_INDEX, QS_FAIL, "%d mV", mv);
         return;

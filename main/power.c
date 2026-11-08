@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_private/esp_clk.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -45,11 +46,32 @@ esp_err_t pq_power_init(void)
 
     if (!s_info.restored) {
         pq_drift_init(&s_drift);
+    } else if (s_drift.ppm > 10000 || s_drift.ppm < -10000) {
+        // 深睡定时器与 RTC 计时用的是同一个 RC 慢时钟，真实漂移不可能超过 1%。
+        // 超过就说明估计值把“醒来后的固定开销”当成了漂移（旧固件留下的脏数据），
+        // 直接清零，否则补偿会越垫越高、短时长档必然超差。
+        ESP_LOGW(TAG, "丢弃异常漂移估计 %ld ppm", (long)s_drift.ppm);
+        pq_drift_init(&s_drift);
     } else {
         // esp_clk_rtc_time() 在上一次启动里被记入 arm_us。若 RTC 计时在深睡期间
         // 被复位，这个差值为负，pq_sleep_result_from() 会返回“测不出来”而不是负数。
-        pq_sleep_result_from(&s_rtc, esp_clk_rtc_time(), &s_info.last);
-        if (s_info.last.valid && s_info.wake == PQ_WAKE_TIMER) {
+        //
+        // 必须扣掉“醒来之后到现在”这段清醒时间：RTC 一直走，而我们在 app_main
+        // 里读到它时，引导程序与本模块初始化已经花掉几百毫秒。不扣的话这段固定开销
+        // 会被漂移补偿当成“睡久了”，补偿值越垫越高，10 秒档很快就超出容差。
+        const uint64_t now = esp_clk_rtc_time();
+        const uint64_t awake = (uint64_t)esp_timer_get_time();
+        uint64_t measured = now > s_rtc.arm_us ? now - s_rtc.arm_us : 0;
+        measured = measured > awake ? measured - awake : 0;
+
+        pq_sleep_result_from(&s_rtc, s_rtc.arm_us + measured, &s_info.last);
+        ESP_LOGI(TAG, "时长校正: 原始 %llu us - 清醒 %llu us = %llu us",
+                 (unsigned long long)(now > s_rtc.arm_us ? now - s_rtc.arm_us : 0),
+                 (unsigned long long)awake, (unsigned long long)measured);
+        // 同源时钟下真实漂移接近 0：只把 0.5% 以内的样本计入补偿，
+        // 更大的偏差来自引导/初始化的固定开销，不能拿它调整下一次睡眠。
+        if (s_info.last.valid && s_info.wake == PQ_WAKE_TIMER &&
+            s_info.last.error_ppm <= 5000 && s_info.last.error_ppm >= -5000) {
             if (!pq_drift_update(&s_drift, s_info.last.requested_us, s_info.last.measured_us)) {
                 ESP_LOGW(TAG, "漂移样本被拒: 请求 %llu us, 实测 %llu us",
                          (unsigned long long)s_info.last.requested_us,
