@@ -10,9 +10,14 @@
 #include "bsp_audio.h"
 #include "bsp_battery.h"
 #include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
+#include "app_home.h"
 #include "demo.h"
+#include "demo_menu.h"
 #include "demo_navigation.h"
+#include "font_probe.h"
 #include "key_guard.h"
+#include "power.h"
+#include "quest.h"
 #include "ui_pixel.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -94,6 +99,11 @@ static void enter_menu(void) {
     menu_build();
 }
 
+// 供主屏的 LEGACY DEMOS 入口调用：本应用仍保留上游参考页。
+void demo_menu_show(void) {
+    enter_menu();
+}
+
 static demo_nav_input_t navigation_input(bsp_btn_t btn, bsp_btn_ev_t event) {
     if (event == BSP_BTN_LONG && btn == BSP_BTN_OK) return DEMO_NAV_INPUT_OK_LONG;
     if (event != BSP_BTN_CLICK) return DEMO_NAV_INPUT_OTHER;
@@ -104,6 +114,21 @@ static demo_nav_input_t navigation_input(bsp_btn_t btn, bsp_btn_ev_t event) {
 }
 
 static void process_input(const input_event_t *input) {
+    // 本应用的页面优先：主屏、自检、字体探针各自处理自己的按键；
+    // 三者都不活动时，才把事件交给上游 demo 菜单/演示页。
+    if (app_home_is_active()) {
+        app_home_handle_key(input->btn, input->event);
+        return;
+    }
+    if (quest_is_active()) {
+        quest_handle_key(input->btn, input->event);
+        return;
+    }
+    if (font_probe_is_active()) {
+        font_probe_handle_key(input->btn, input->event);
+        return;
+    }
+
     demo_nav_input_t nav_input = navigation_input(input->btn, input->event);
 
     if (s_navigation.active >= 0) {
@@ -126,7 +151,20 @@ static void process_input(const input_event_t *input) {
         return;
     }
 
-    if (nav_input == DEMO_NAV_INPUT_OTHER || nav_input == DEMO_NAV_INPUT_OK_LONG) return;
+    if (nav_input == DEMO_NAV_INPUT_OTHER) return;
+    // 菜单里长按 OK = 返回本应用主屏，避免停留在参考页出不去。
+    if (nav_input == DEMO_NAV_INPUT_OK_LONG) {
+        if (!bsp_lvgl_lock(500)) return;
+        if (s_menu_scr) {
+            lv_obj_delete(s_menu_scr);
+            s_menu_scr = NULL;
+            s_mascot = NULL;
+        }
+        s_navigation.active = -1;
+        app_home_open();
+        bsp_lvgl_unlock();
+        return;
+    }
     if (!bsp_lvgl_lock(500)) return;
     demo_nav_result_t result = demo_navigation_handle(
         &s_navigation, nav_input, s_ok[s_navigation.selected]);
@@ -215,7 +253,9 @@ static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "FoloToy AI Passport BSP demo 启动");
+    ESP_LOGI(TAG, "Passport Quest 启动");
+    // 先于 UI 初始化：解码 RTC 快照、算上次睡眠的实测时长、更新漂移估计。
+    pq_power_init();
     const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
     if (wake_causes & ~(1u << ESP_SLEEP_WAKEUP_UNDEFINED)) {
         ESP_LOGI(TAG, "休眠唤醒原因位图: 0x%02x", (unsigned)wake_causes);
@@ -269,7 +309,13 @@ void app_main(void) {
     s_ok[6] = true;
 
     if (bsp_lvgl_lock(1000)) {
-        enter_menu();
+        const pq_power_info_t *power = pq_power_info();
+        if (power->restored && power->mode == 1) {
+            // 从自检关卡的深睡醒来：直接回到关卡页，第一眼就能看到实测结果。
+            quest_open();
+        } else {
+            app_home_open();
+        }
         bsp_lvgl_unlock();
         s_input_ready = true;
     }

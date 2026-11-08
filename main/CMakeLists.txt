@@ -11,6 +11,12 @@ idf_component_register(
          "demo_wifi.c"
          "demo_ble.c"
          "demo_low_power.c"
+         "power.c"
+         "power_state.c"
+         "pq_ui.c"
+         "app_home.c"
+         "quest.c"
+         "font_probe.c"
     INCLUDE_DIRS "."
     REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
 )

@@ -179,7 +179,7 @@ If device-side history that survives a full flash is ever required, shrink the a
 
 The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundled with LVGL is only a subset; neither can be validated by "it compiles as UTF-8".
 
-- **Probe**: in M1, enable `CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y` and set one label to that font explicitly to confirm Chinese actually renders.
+- **Probe**: in M1, enable `CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y` and set one label to that font explicitly to confirm Chinese actually renders. That built-in subset has a fixed, hand-picked character list that does not cover all UI copy, and it costs about 200 KB of flash, so it stays a probe rather than the production font.
 - **Production path**: generate an application subset with a pinned `lv_font_conv` from a licensed Simplified Chinese font (for example Noto Sans SC, OFL-1.1), one subset each for 16 px and 20 px, 4 bpp, uncompressed.
 - Keep the conversion command and the character list under version control; commit the generated `.c` into `assets/fonts/` and add it to `main/CMakeLists.txt`. The source font itself is not committed (too large), but its name, version, license, and SHA-256 must be recorded.
 - **Glyph gate**: a host test decodes every fixed UI string into code points and asserts each one exists in the generated font's cmap, reporting missing glyphs as `U+XXXX`; include a known-missing character as a negative control so the test cannot pass trivially.
@@ -190,7 +190,7 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | Item | Budget | Note |
 | --- | --- | --- |
 | Flash (code) | ≤ 150 KB added | excludes image and font assets |
-| Flash (fonts) | ≤ 120 KB added | CJK subsets for 16 px and 20 px, about 300 glyphs at 4 bpp |
+| Flash (fonts) | target ≤ 120 KB | generated application subsets for 16 px and 20 px, about 300 glyphs at 4 bpp; the built-in subset enabled in M1 measures about 200 KB |
 | LVGL pool | 24 KB | one screen at a time, released on exit |
 | Audio buffers | 2 × 512 × 2 B | one for record, one for playback, heap-allocated |
 | BLE | measured while connected | NimBLE with peripheral + broadcaster only; coexistence with LVGL must be measured |
