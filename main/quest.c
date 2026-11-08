@@ -95,23 +95,27 @@ void quest_open(void)
     pq_ui_text(s_page, "L12", 14, 40, &pq_font_16, PQ_COLOR_MUTED);
 
     lv_obj_t *panel = lv_obj_create(s_page);
-    lv_obj_set_size(panel, 216, 58);
+    lv_obj_set_size(panel, 216, 62);
     lv_obj_set_pos(panel, 12, 68);
     lv_obj_set_style_bg_color(panel, lv_color_hex(PQ_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, 10, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
-    lv_obj_set_style_pad_all(panel, 4, 0);
+    lv_obj_set_style_pad_all(panel, 6, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_duration_label = pq_ui_text(panel, "", 4, 2, &pq_font_20, PQ_COLOR_ACCENT);
+    s_duration_label = pq_ui_text(panel, "", 4, 0, &pq_font_20, PQ_COLOR_ACCENT);
+    lv_obj_set_height(s_duration_label, 30);
     refresh_duration();
 
-    s_result_label = pq_ui_text(s_page, "", 14, 140, &pq_font_16, PQ_COLOR_INK);
-    s_detail_label = pq_ui_text(s_page, "", 14, 166, &pq_font_16, PQ_COLOR_MUTED);
+    s_result_label = pq_ui_text(s_page, "", 14, 144, &pq_font_16, PQ_COLOR_INK);
+    lv_obj_set_height(s_result_label, 24);
+    s_detail_label = pq_ui_text(s_page, "", 14, 170, &pq_font_16, PQ_COLOR_MUTED);
+    lv_obj_set_height(s_detail_label, 24);
     refresh_result();
 
-    s_notice = pq_ui_text(s_page, "", 14, 200, &pq_font_16, PQ_COLOR_WARN);
+    s_notice = pq_ui_text(s_page, "", 14, 204, &pq_font_16, PQ_COLOR_WARN);
+    lv_obj_set_height(s_notice, 24);
 
     lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_QUEST_HINT, 0, 288, &pq_font_16,
                                 PQ_COLOR_MUTED);

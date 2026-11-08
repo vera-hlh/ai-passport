@@ -116,13 +116,24 @@ def rasterize(font_path: Path, size: int, cps: list[int]) -> tuple[list[dict], i
             raw = Image.Image()._new(mask).tobytes()
             nibbles = bytearray((value * 15 + 127) // 255 for value in raw)
         ox, oy = offset
+        # 汉字做“光学居中”：让字墨在行框里上下留白相等（字形实际上下沿因字而异，
+        # 若一律按基线对齐，视觉上会差 1~2 px）。标点与 ASCII 仍按基线对齐，
+        # 否则逗号句号会被抬到行中间。
+        if 0x4E00 <= cp <= 0x9FFF:
+            ofs_y = (line_height - base_line) - box_h - (line_height - box_h) // 2
+        else:
+            ofs_y = -(oy + box_h)
         glyphs.append({
             "cp": cp,
             "box_w": box_w,
             "box_h": box_h,
             "ofs_x": int(ox),
-            # 行顶到基线是 line_height - base_line，再加上字形在基线上方的偏移
-            "ofs_y": int(line_height - base_line + oy),
+            # LVGL 的定位公式（lv_draw_label.c）：
+            #   glyph_top = line_top + (line_height - base_line) - box_h - ofs_y
+            # 而已知 glyph_top = line_top + (line_height - base_line) + oy（oy 是基线上方的负偏移），
+            # 两式相等解出 ofs_y = -(oy + box_h)，也就是“字形底边到基线的距离取负”。
+            "ofs_y": int(ofs_y),
+            "y1": int(oy + box_h),   # 字形底边相对基线（用于语义校验，不写进 C）
             "adv_w": int(round(font.getlength(ch) * 16)),
             "nibbles": nibbles,
         })
@@ -269,7 +280,8 @@ _DS_RE = re.compile(
     r"\.ofs_x = (-?\d+), \.ofs_y = (-?\d+) \}")
 
 
-def verify_c(text: str, glyphs: list[dict], offsets: list[int]) -> list[str]:
+def verify_c(text: str, glyphs: list[dict], offsets: list[int],
+             line_height: int, base_line: int) -> list[str]:
     """按 LVGL 的语义把生成的 C 解析回来，与栅格化结果逐像素比对。"""
     problems: list[str] = []
 
@@ -295,6 +307,18 @@ def verify_c(text: str, glyphs: list[dict], offsets: list[int]) -> list[str]:
             got.append((byte >> 4) if bit % 2 == 0 else (byte & 0x0F))
         if list(expected) != got:
             problems.append(f"U+{glyph['cp']:04X} 位图不一致")
+
+        # 语义校验：LVGL 的公式是 ink_top = (line_height - base_line) - box_h - ofs_y。
+        # 汉字要求字墨在行框内居中；ASCII/标点要求底边落在基线上。
+        ink_top = (line_height - base_line) - box_h - ofs_y
+        if 0x4E00 <= glyph["cp"] <= 0x9FFF:
+            if box_h and ink_top != (line_height - box_h) // 2:
+                problems.append(f"U+{glyph['cp']:04X} 汉字未居中: ink_top={ink_top}")
+        else:
+            expected_bottom = (line_height - base_line) + glyph["y1"]
+            if box_h and ink_top + box_h != expected_bottom:
+                problems.append(
+                    f"U+{glyph['cp']:04X} 未对齐基线: ink_bottom={ink_top + box_h} 期望 {expected_bottom}")
 
     # cmap 语义：ASCII 连续段 + 稀疏偏移表，逐个码点反查 glyph id 是否正确。
     sparse_start = None
@@ -348,7 +372,7 @@ def main() -> int:
     text = emit_c(args.name, args.size, glyphs, line_height, base_line,
                   cmaps, offsets, bitmap, starts)
 
-    problems = verify_c(text, glyphs, offsets)
+    problems = verify_c(text, glyphs, offsets, line_height, base_line)
     if problems:
         for problem in problems[:20]:
             print(f"ERROR {problem}", file=sys.stderr)

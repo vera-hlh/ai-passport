@@ -128,7 +128,8 @@ void font_probe_open(void)
     s_active = true;
     s_page = pq_ui_page_create(PQ_TXT_FONT_PROBE);
 
-    pq_ui_text(s_page, PQ_TXT_HOME_TITLE, 14, 44, &pq_font_20, PQ_COLOR_INK);
+    lv_obj_t *big = pq_ui_text(s_page, PQ_TXT_HOME_TITLE, 14, 44, &pq_font_20, PQ_COLOR_INK);
+    lv_obj_set_height(big, 30);
     pq_ui_text(s_page, PQ_TXT_FONT_SAMPLE, 14, 80, &pq_font_16, PQ_COLOR_INK);
 
     char row[96];
@@ -143,7 +144,7 @@ void font_probe_open(void)
     lv_obj_set_width(s_missing_label, 212);
     lv_label_set_long_mode(s_missing_label, LV_LABEL_LONG_WRAP);
 
-    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 288, &pq_font_16,
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 284, &pq_font_16,
                                 PQ_COLOR_MUTED);
     lv_obj_set_width(hint, LV_PCT(100));
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);

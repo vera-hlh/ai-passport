@@ -75,8 +75,11 @@ lv_obj_t *pq_ui_row(lv_obj_t *page, int x, int y, int w, int h, bool selected)
     lv_obj_set_size(row, w, h);
     lv_obj_set_pos(row, x, y);
     lv_obj_set_style_radius(row, 8, 0);
-    lv_obj_set_style_border_width(row, selected ? 2 : 0, 0);
-    lv_obj_set_style_border_color(row, lv_color_hex(PQ_COLOR_ACCENT), 0);
+    /* 边框宽度恒为 2：LVGL 的内容区会扣掉边框，若选中行才加边框，
+       选中与未选中的文字会差 2 px。未选中时把边框画成底色即可。 */
+    lv_obj_set_style_border_width(row, 2, 0);
+    lv_obj_set_style_border_color(
+        row, lv_color_hex(selected ? PQ_COLOR_ACCENT : PQ_COLOR_BG), 0);
     lv_obj_set_style_bg_color(row, lv_color_hex(selected ? PQ_COLOR_PANEL : PQ_COLOR_BG), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(row, 0, 0);

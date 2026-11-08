@@ -23,9 +23,10 @@
 static const char *TAG = "pq_home";
 
 #define ENTRY_COUNT 5
-#define ROW_Y0 126
-#define ROW_STEP 30
-#define ROW_H 28
+#define ROW_Y0 124
+#define ROW_STEP 32
+#define ROW_H 32      /* 行高 = 文字行高 + 上下各 4 px，选中框才不会压字 */
+#define LINE_H 24
 
 typedef struct {
     const char *name;
@@ -116,14 +117,16 @@ static void list_build(void)
         lv_obj_set_style_text_color(
             label, lv_color_hex(selected ? PQ_COLOR_INK : PQ_COLOR_MUTED), 0);
         lv_label_set_text(label, ENTRIES[i].name);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
+        lv_obj_set_height(label, LINE_H);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 2);
 
         if (ENTRIES[i].sub) {
             lv_obj_t *tag = lv_label_create(row);
             lv_obj_set_style_text_font(tag, &pq_font_16, 0);
             lv_obj_set_style_text_color(tag, lv_color_hex(PQ_COLOR_MUTED), 0);
             lv_label_set_text(tag, ENTRIES[i].sub);
-            lv_obj_align(tag, LV_ALIGN_RIGHT_MID, -10, 0);
+            lv_obj_set_height(tag, LINE_H);
+            lv_obj_align(tag, LV_ALIGN_RIGHT_MID, -10, 2);
         }
     }
 }
@@ -148,18 +151,21 @@ void app_home_open(void)
 
     // 状态区：一个暗色面板，三行读数。
     lv_obj_t *panel = lv_obj_create(s_page);
-    lv_obj_set_size(panel, 216, 76);
-    lv_obj_set_pos(panel, 12, 44);
+    lv_obj_set_size(panel, 216, 82);
+    lv_obj_set_pos(panel, 12, 38);
     lv_obj_set_style_bg_color(panel, lv_color_hex(PQ_COLOR_PANEL), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, 10, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
-    lv_obj_set_style_pad_all(panel, 4, 0);
+    lv_obj_set_style_pad_all(panel, 5, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     s_status_batt = pq_ui_text(panel, "", 4, 0, &pq_font_16, PQ_COLOR_INK);
-    s_status_sleep = pq_ui_text(panel, "", 4, 24, &pq_font_16, PQ_COLOR_ACCENT);
-    s_status_last = pq_ui_text(panel, "", 4, 48, &pq_font_16, PQ_COLOR_MUTED);
+    lv_obj_set_height(s_status_batt, LINE_H);
+    s_status_sleep = pq_ui_text(panel, "", 4, LINE_H, &pq_font_16, PQ_COLOR_ACCENT);
+    lv_obj_set_height(s_status_sleep, LINE_H);
+    s_status_last = pq_ui_text(panel, "", 4, LINE_H * 2, &pq_font_16, PQ_COLOR_MUTED);
+    lv_obj_set_height(s_status_last, LINE_H);
     refresh_status();
 
     s_selected = 0;
