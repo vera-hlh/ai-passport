@@ -180,9 +180,9 @@ NVS 分区只有 24 KiB（`0x9000`–`0xF000`），还要与 PHY 校准数据共
 默认主题的 Montserrat 14/20 不含任何汉字，LVGL 内置的 Source Han Sans SC 只是子集——两者都不能靠“UTF-8 编译通过”来证明。
 
 - **探针**：M1 先用 `CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y` + 一个显式指定字体的标签，确认中文能画出来。该内置子集的字符表是固定挑选的，覆盖不到全部界面文案，且实测约占 200 KB Flash，所以只能当探针、不能当正式字体；
-- **正式方案**：用固定版本的 `lv_font_conv` 从授权允许的简体中文字体（如 Noto Sans SC，OFL-1.1）生成**应用子集**，16 px 与 20 px 各一份，4 bpp、不压缩；
-- 生成命令与字符清单纳入版本管理；生成的 `.c` 放 `assets/fonts/` 并加入 `main/CMakeLists.txt`；源字体本身不入库（体积大），但字体名、版本、授权与 SHA-256 必须记录；
-- **缺字门禁**：宿主测试把所有固定文案解码成码点，逐个断言存在于生成字体的 cmap 中，缺字报 `U+XXXX`；并加一个已知缺字的反例，避免测试恒真；
+- **正式方案（已落地）**：`tools/gen_font.py` 用 Pillow 栅格化 **Noto Sans CJK SC Regular**（SIL OFL 1.1），直接写 LVGL 的 PLAIN 4bpp 格式，16 px 与 20 px 各一份；生成后把输出的 C 解析回来，按 LVGL 的 cmap 与位图语义逐像素比对，不一致即失败。**不用 `lv_font_conv`**——它在当前 Node 下写出坏位图（见 [参考条目](../reference/shinku-chen/lvgl-cjk-font-subsets.zh_CN.md)）。
+- 字符清单分两处：`main/ui_strings.h` 是全部界面文案，`tools/font_charset.txt` 是字体覆盖范围；生成的 `.c` 放 `assets/fonts/` 并加入 `main/CMakeLists.txt`。源 OTF 不入库，字族/版本/许可/SHA-256 记在 `assets/fonts/README.zh_CN.md`；
+- **缺字门禁**：`tools/gen_font.py --check` 扫描 `main/ui_strings.h`，任何不在字符集里的字符报 `U+XXXX` 并让 `tools/validate.sh --static` 失败；
 - **动态文本**：SSID、AP 名、设备名可能含任意 Unicode，v1 一律转换为 ASCII 或显示占位符（例如“网络 3”），不把未知字符丢给中文字体，也不静默丢字。
 
 ## 10. 资源预算
@@ -190,7 +190,7 @@ NVS 分区只有 24 KiB（`0x9000`–`0xF000`），还要与 PHY 校准数据共
 | 项 | 预算 | 说明 |
 | --- | --- | --- |
 | Flash（代码） | 新增 ≤ 150 KB | 不含图片与字体资源 |
-| Flash（字体） | 目标 ≤ 120 KB | M2 生成的应用子集（16/20 px、约 300 字形、4 bpp）；M1 临时启用的内置子集实测约 200 KB |
+| Flash（字体） | 实测约 35 KB | 16 px + 20 px、152 码位、4 bpp；M1 临时启用的内置子集约 200 KB 已移除 |
 | LVGL 池 | 24 KB | 单屏页面，用完回收 |
 | 音频缓冲 | 2 × 512 × 2 B | 录放各一块，动态申请 |
 | BLE | 连接态实测 | NimBLE 仅开 peripheral + broadcaster；与 LVGL 共存需实测 |

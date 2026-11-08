@@ -20,3 +20,9 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
 )
+
+# 生成的中文点阵字体（assets/fonts/，见 tools/gen_font.py）
+target_sources(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/pq_font_16.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/pq_font_20.c"
+)

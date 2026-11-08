@@ -55,3 +55,10 @@ BSP 在 `components/bsp/src/bsp_battery.c` 中嵌入这 80 字节，主机检查
 `fa7365671093ef449c5bdcfb4adb279e3d275f888109f50b6b2f21e9b96220d5`。
 这是电量计参数，不是充电配置，也不能通用于所有 500 mAh 电芯；详见
 [硬件指南](../docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md#9-cw2017-电池计)。
+
+## 中文点阵字体（fonts）
+
+[`fonts/`](fonts/README.zh_CN.md) 存放 `tools/gen_font.py` 从 Noto Sans CJK SC Regular
+（SIL OFL 1.1）生成的两份 LVGL 4bpp 子集：16 px 与 20 px，共 152 个码位。
+源 OTF 不提交，字族、SHA-256、下载地址与重新生成命令记录在
+[`fonts/README.zh_CN.md`](fonts/README.zh_CN.md)。

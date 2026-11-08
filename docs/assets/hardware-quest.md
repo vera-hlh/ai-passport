@@ -180,9 +180,9 @@ If device-side history that survives a full flash is ever required, shrink the a
 The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundled with LVGL is only a subset; neither can be validated by "it compiles as UTF-8".
 
 - **Probe**: in M1, enable `CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y` and set one label to that font explicitly to confirm Chinese actually renders. That built-in subset has a fixed, hand-picked character list that does not cover all UI copy, and it costs about 200 KB of flash, so it stays a probe rather than the production font.
-- **Production path**: generate an application subset with a pinned `lv_font_conv` from a licensed Simplified Chinese font (for example Noto Sans SC, OFL-1.1), one subset each for 16 px and 20 px, 4 bpp, uncompressed.
-- Keep the conversion command and the character list under version control; commit the generated `.c` into `assets/fonts/` and add it to `main/CMakeLists.txt`. The source font itself is not committed (too large), but its name, version, license, and SHA-256 must be recorded.
-- **Glyph gate**: a host test decodes every fixed UI string into code points and asserts each one exists in the generated font's cmap, reporting missing glyphs as `U+XXXX`; include a known-missing character as a negative control so the test cannot pass trivially.
+- **Production path (implemented)**: `tools/gen_font.py` rasterises **Noto Sans CJK SC Regular** (SIL OFL 1.1) with Pillow and writes the LVGL PLAIN 4bpp format directly, one subset each for 16 px and 20 px. It then parses its own C output back and compares every glyph pixel by pixel against the rasterised mask. **`lv_font_conv` is not used**: it writes corrupted bitmaps under current Node (see the [reference entry](../reference/shinku-chen/lvgl-cjk-font-subsets.md)).
+- The character set lives in two places: `main/ui_strings.h` holds every user-visible string, `tools/font_charset.txt` defines the covered range. Generated `.c` files live in `assets/fonts/` and are added to `main/CMakeLists.txt`; the source OTF is not committed, and family, version, license, and SHA-256 are recorded in `assets/fonts/README.md`.
+- **Glyph gate**: `tools/gen_font.py --check` scans `main/ui_strings.h` and reports any character outside the charset as `U+XXXX`, failing `tools/validate.sh --static`.
 - **Dynamic text**: SSIDs, AP names, and device names may contain arbitrary Unicode; v1 converts them to ASCII or shows a placeholder (for example "Network 3") rather than feeding unknown characters to the CJK font or silently dropping them.
 
 ## 10. Resource budget
@@ -190,7 +190,7 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | Item | Budget | Note |
 | --- | --- | --- |
 | Flash (code) | ≤ 150 KB added | excludes image and font assets |
-| Flash (fonts) | target ≤ 120 KB | generated application subsets for 16 px and 20 px, about 300 glyphs at 4 bpp; the built-in subset enabled in M1 measures about 200 KB |
+| Flash (fonts) | about 35 KB measured | 16 px + 20 px, 152 code points, 4 bpp; the built-in subset enabled in M1 (about 200 KB) has been removed |
 | LVGL pool | 24 KB | one screen at a time, released on exit |
 | Audio buffers | 2 × 512 × 2 B | one for record, one for playback, heap-allocated |
 | BLE | measured while connected | NimBLE with peripheral + broadcaster only; coexistence with LVGL must be measured |

@@ -8,6 +8,8 @@
 #include "font_probe.h"
 
 #include "app_home.h"
+#include "pq_fonts.h"
+#include "ui_strings.h"
 #include "bsp_display.h"
 #include "pq_ui.h"
 
@@ -19,28 +21,10 @@
 
 static const char *TAG = "pq_font";
 
-LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk);
+// 计划中的界面文案来自 main/ui_strings.h（字体覆盖检查的唯一输入）。
+static const char *const *const PLANNED_TEXT = PQ_UI_STRINGS;
 
-// 计划中的界面文案。改界面时同步改这里，探针会自动告诉你缺哪些字。
-static const char *const PLANNED_TEXT[] = {
-    "工牌管家",
-    "硬件自检",
-    "番茄钟",
-    "体检报告",
-    "深睡测试",
-    "正在入睡",
-    "请松开按键",
-    "电量",
-    "唤醒次数",
-    "上次睡眠",
-    "误差",
-    "完成",
-    "失败",
-    "旧演示",
-    "字体探针",
-};
-
-#define PLANNED_COUNT (sizeof(PLANNED_TEXT) / sizeof(PLANNED_TEXT[0]))
+#define PLANNED_COUNT PQ_UI_STRING_COUNT
 #define MISSING_MAX 12
 
 static lv_obj_t *s_page;
@@ -101,7 +85,7 @@ static void check_coverage(coverage_t *out)
         while ((cp = utf8_next(&cursor)) != 0) {
             out->total++;
             lv_font_glyph_dsc_t dsc;
-            if (!lv_font_get_glyph_dsc(&lv_font_source_han_sans_sc_16_cjk, &dsc, cp, 0)) {
+            if (!lv_font_get_glyph_dsc(&pq_font_16, &dsc, cp, 0)) {
                 if (out->missing < MISSING_MAX) out->missing_cp[out->missing] = cp;
                 out->missing++;
                 ESP_LOGW(TAG, "缺字 U+%04X（文案 \"%s\"）", (unsigned)cp, PLANNED_TEXT[i]);
@@ -155,7 +139,7 @@ void font_probe_open(void)
     for (size_t i = 0; i < 3 && i < PLANNED_COUNT; i++) {
         lv_obj_t *sample = pq_ui_text(s_page, PLANNED_TEXT[i], 14,
                                       64 + (int)i * 26,
-                                      &lv_font_source_han_sans_sc_16_cjk, PQ_COLOR_INK);
+                                      &pq_font_16, PQ_COLOR_INK);
         (void)sample;
     }
 
