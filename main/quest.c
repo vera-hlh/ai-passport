@@ -16,6 +16,7 @@
 #include "power.h"
 #include "ui_strings.h"
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -64,8 +65,30 @@ static const quest_level_t LEVELS[LEVEL_COUNT] = {
     { PQ_TXT_DEEP_SLEEP, l12_enter, l12_key },
 };
 
-static quest_status_t s_status[LEVEL_COUNT];
-static char s_detail[LEVEL_COUNT][DETAIL_MAX];
+// 结果放 RTC 内存：L12 的深睡会复位芯片，普通 RAM 里的结果会全部丢失，
+// 表现为“做完全部关卡、一测深睡，报告就归零”。RTC 内存在深睡与软复位后都保留，
+// 掉电才丢；用 magic 区分“上次会话的结果”与上电随机值。
+#define QUEST_RESULTS_MAGIC 0x51523532u   // 'QR52'
+static RTC_DATA_ATTR uint32_t s_results_magic;
+static RTC_DATA_ATTR quest_status_t s_status[LEVEL_COUNT];
+static RTC_DATA_ATTR char s_detail[LEVEL_COUNT][DETAIL_MAX];
+static RTC_DATA_ATTR uint32_t s_l12_recorded_count;
+
+static void results_ensure(void)
+{
+    if (s_results_magic == QUEST_RESULTS_MAGIC) return;
+    memset(s_status, 0, sizeof s_status);
+    memset(s_detail, 0, sizeof s_detail);
+    s_l12_recorded_count = 0;
+    s_results_magic = QUEST_RESULTS_MAGIC;
+}
+
+static void results_clear(void)
+{
+    memset(s_status, 0, sizeof s_status);
+    memset(s_detail, 0, sizeof s_detail);
+    s_l12_recorded_count = 0;
+}
 
 static lv_obj_t *s_page;
 static lv_obj_t *s_row_states[LEVEL_COUNT];
@@ -165,6 +188,7 @@ static void list_refresh(void)
 
 void quest_open(void)
 {
+    results_ensure();
     s_active = true;
     s_current = -1;
 
@@ -541,8 +565,34 @@ static void l12_refresh_result(void)
     }
 }
 
+// L12 的判据是客观的：既然刚从这个关卡睡醒，就自动把这一轮记进报告，
+// 不需要用户再按一次 OK（OK 在本关的语义是“再睡一次”）。
+static void l12_record_if_fresh(void)
+{
+    const pq_power_info_t *info = pq_power_info();
+    if (!info->restored || info->mode != 1) return;
+    if (info->wake == PQ_WAKE_UNKNOWN) return;
+    if (info->count <= s_l12_recorded_count) return;
+
+    s_l12_recorded_count = info->count;
+    if (info->last.valid) {
+        char percent[16];
+        pq_ui_format_ppm(percent, sizeof percent, info->last.error_ppm);
+        s_status[L12_INDEX] = QS_PASS;
+        snprintf(s_detail[L12_INDEX], DETAIL_MAX, "%.1fs %s",
+                 (double)info->last.measured_us / 1000000.0, percent);
+    } else {
+        s_status[L12_INDEX] = QS_FAIL;
+        snprintf(s_detail[L12_INDEX], DETAIL_MAX, "%s", PQ_TXT_UNMEASURED);
+    }
+    ESP_LOGI(TAG, "%s: %s %s（自动记录）", LEVELS[L12_INDEX].title,
+             status_text(s_status[L12_INDEX]), s_detail[L12_INDEX]);
+    report_log();
+}
+
 static void l12_enter(void)
 {
+    l12_record_if_fresh();
     s_page = pq_ui_page_create(PQ_TXT_DEEP_SLEEP);
     pq_ui_text(s_page, "L12", 14, 40, &pq_font_16, PQ_COLOR_MUTED);
 
@@ -618,6 +668,13 @@ void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         if (!bsp_lvgl_lock(300)) return;
         quest_close();
         app_home_open();
+        bsp_lvgl_unlock();
+        return;
+    }
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_UP) {
+        if (!bsp_lvgl_lock(300)) return;
+        results_clear();
+        quest_open();
         bsp_lvgl_unlock();
         return;
     }
