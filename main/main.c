@@ -18,11 +18,13 @@
 #include "key_guard.h"
 #include "power.h"
 #include "quest.h"
+#include "report.h"
 #include "ui_pixel.h"
 #include "lvgl.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -126,6 +128,10 @@ static void process_input(const input_event_t *input) {
     }
     if (font_probe_is_active()) {
         font_probe_handle_key(input->btn, input->event);
+        return;
+    }
+    if (report_is_active()) {
+        report_handle_key(input->btn, input->event);
         return;
     }
 
@@ -254,6 +260,18 @@ static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user) {
 
 void app_main(void) {
     ESP_LOGI(TAG, "Passport Quest 启动");
+
+    // NVS 先初始化：自检报告要落盘，射频校准数据也依赖它。
+    esp_err_t nvs = nvs_flash_init();
+    if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS 需要重建: %s", esp_err_to_name(nvs));
+        nvs_flash_erase();
+        nvs = nvs_flash_init();
+    }
+    if (nvs != ESP_OK) {
+        ESP_LOGE(TAG, "NVS 初始化失败，报告将无法保存: %s", esp_err_to_name(nvs));
+    }
+
     // 先于 UI 初始化：解码 RTC 快照、算上次睡眠的实测时长、更新漂移估计。
     pq_power_init();
     const uint32_t wake_causes = esp_sleep_get_wakeup_causes();

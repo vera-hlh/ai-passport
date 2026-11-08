@@ -12,6 +12,7 @@
 #include "pq_ui.h"
 #include "power.h"
 #include "quest.h"
+#include "report.h"
 #include "ui_strings.h"
 
 #include "esp_log.h"
@@ -36,7 +37,7 @@ typedef struct {
 static const home_entry_t ENTRIES[ENTRY_COUNT] = {
     { PQ_TXT_SELF_CHECK, NULL },
     { PQ_TXT_FOCUS, "M4" },
-    { PQ_TXT_REPORT, "M3" },
+    { PQ_TXT_REPORT, NULL },
     { PQ_TXT_FONT_PROBE, "M1" },
     { PQ_TXT_LEGACY, NULL },
 };
@@ -215,7 +216,8 @@ void app_home_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 set_notice(PQ_TXT_COMING_SOON);
                 break;
             case 2:
-                set_notice(PQ_TXT_COMING_SOON);
+                goto_other_page();
+                report_open();
                 break;
             case 3:
                 goto_other_page();

@@ -17,5 +17,15 @@ void quest_close(void);
 // 自检页是否处于活动状态（按键路由用）。
 bool quest_is_active(void);
 
+// 报告页用的只读访问器。
+int quest_results_count(void);
+const char *quest_results_title(int index);
+int quest_results_status(int index);          // 0 待测 / 1 通过 / 2 失败
+const char *quest_results_detail(int index);
+const char *quest_results_status_text(int index);
+
+// 清空结果（同时写回 NVS）。
+void quest_results_clear(void);
+
 // 自检页按键处理，由 main.c 的输入任务调用（内部自行取/放 LVGL 锁）。
 void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev);

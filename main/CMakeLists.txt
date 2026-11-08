@@ -17,6 +17,7 @@ idf_component_register(
          "app_home.c"
          "quest.c"
          "font_probe.c"
+         "report.c"
     INCLUDE_DIRS "."
     REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
 )

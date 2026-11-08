@@ -17,6 +17,8 @@
 #include "ui_strings.h"
 
 #include "esp_attr.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -74,12 +76,60 @@ static RTC_DATA_ATTR quest_status_t s_status[LEVEL_COUNT];
 static RTC_DATA_ATTR char s_detail[LEVEL_COUNT][DETAIL_MAX];
 static RTC_DATA_ATTR uint32_t s_l12_recorded_count;
 
+// NVS 里的持久副本：RTC 内存掉电就没了，NVS 才是跨断电的存储。
+// 注意整片烧写合并镜像会把 NVS 区间填 0xFF，报告可能被重置，这一点在报告页提示。
+#define QUEST_NVS_NAMESPACE "pq_quest"
+#define QUEST_NVS_KEY "results"
+#define QUEST_BLOB_MAGIC 0x51424c31u   // 'QBL1'
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    int32_t status[LEVEL_COUNT];
+    char detail[LEVEL_COUNT][DETAIL_MAX];
+} quest_blob_t;
+
+static void results_save(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(QUEST_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+    quest_blob_t blob = { .magic = QUEST_BLOB_MAGIC, .version = 1 };
+    for (int i = 0; i < LEVEL_COUNT; i++) {
+        blob.status[i] = (int32_t)s_status[i];
+        memcpy(blob.detail[i], s_detail[i], DETAIL_MAX);
+    }
+    esp_err_t e = nvs_set_blob(handle, QUEST_NVS_KEY, &blob, sizeof blob);
+    if (e == ESP_OK) e = nvs_commit(handle);
+    if (e != ESP_OK) ESP_LOGW(TAG, "报告写入 NVS 失败: %s", esp_err_to_name(e));
+    nvs_close(handle);
+}
+
+static bool results_load(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(QUEST_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
+    quest_blob_t blob;
+    size_t len = sizeof blob;
+    const bool ok = nvs_get_blob(handle, QUEST_NVS_KEY, &blob, &len) == ESP_OK &&
+                    len == sizeof blob && blob.magic == QUEST_BLOB_MAGIC;
+    nvs_close(handle);
+    if (!ok) return false;
+    for (int i = 0; i < LEVEL_COUNT; i++) {
+        s_status[i] = (quest_status_t)blob.status[i];
+        memcpy(s_detail[i], blob.detail[i], DETAIL_MAX);
+        s_detail[i][DETAIL_MAX - 1] = 0;
+    }
+    ESP_LOGI(TAG, "已从 NVS 恢复上次报告");
+    return true;
+}
+
 static void results_ensure(void)
 {
     if (s_results_magic == QUEST_RESULTS_MAGIC) return;
     memset(s_status, 0, sizeof s_status);
     memset(s_detail, 0, sizeof s_detail);
     s_l12_recorded_count = 0;
+    results_load();
     s_results_magic = QUEST_RESULTS_MAGIC;
 }
 
@@ -88,6 +138,7 @@ static void results_clear(void)
     memset(s_status, 0, sizeof s_status);
     memset(s_detail, 0, sizeof s_detail);
     s_l12_recorded_count = 0;
+    results_save();
 }
 
 static lv_obj_t *s_page;
@@ -149,6 +200,7 @@ static void finish(int index, quest_status_t status, const char *fmt, ...)
     ESP_LOGI(TAG, "%s: %s %s", LEVELS[index].title, status_text(status),
              s_detail[index]);
     report_log();
+    results_save();
     s_current = -1;
     page_close();
     quest_open();
@@ -596,6 +648,7 @@ static void l12_record_if_fresh(void)
     ESP_LOGI(TAG, "%s: %s %s（自动记录）", LEVELS[L12_INDEX].title,
              status_text(s_status[L12_INDEX]), s_detail[L12_INDEX]);
     report_log();
+    results_save();
 }
 
 static void l12_enter(void)
@@ -701,4 +754,37 @@ void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         enter_level(s_selected);
     }
     bsp_lvgl_unlock();
+}
+
+// ------------------------------------------------------------------ 结果访问器
+
+int quest_results_count(void) { return LEVEL_COUNT; }
+
+const char *quest_results_title(int index)
+{
+    if (index < 0 || index >= LEVEL_COUNT) return "";
+    return LEVELS[index].title;
+}
+
+int quest_results_status(int index)
+{
+    if (index < 0 || index >= LEVEL_COUNT) return 0;
+    return (int)s_status[index];
+}
+
+const char *quest_results_detail(int index)
+{
+    if (index < 0 || index >= LEVEL_COUNT) return "";
+    return s_detail[index];
+}
+
+const char *quest_results_status_text(int index)
+{
+    if (index < 0 || index >= LEVEL_COUNT) return PQ_TXT_PENDING;
+    return status_text(s_status[index]);
+}
+
+void quest_results_clear(void)
+{
+    results_clear();
 }
