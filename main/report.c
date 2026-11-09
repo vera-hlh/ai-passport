@@ -19,7 +19,7 @@
 
 static const char *TAG = "pq_report";
 
-#define ROW_Y0 96
+#define ROW_Y0 112
 #define ROW_STEP 32
 #define ROW_H 32
 #define MAX_ROWS 8
@@ -43,14 +43,17 @@ static uint32_t status_color(int status)
 static void detail_refresh(void)
 {
     if (!s_detail) return;
-    const char *text = quest_results_detail(s_selected);
-    if (text && text[0]) {
-        lv_label_set_text(s_detail, text);
-        lv_obj_set_style_text_color(s_detail, lv_color_hex(PQ_COLOR_MUTED), 0);
+    const char *detail = quest_results_detail(s_selected);
+    char text[64];
+    if (detail && detail[0]) {
+        snprintf(text, sizeof text, "%s  %s", quest_results_title(s_selected), detail);
+        lv_obj_set_style_text_color(s_detail, lv_color_hex(PQ_COLOR_INK), 0);
     } else {
-        lv_label_set_text(s_detail, PQ_TXT_PENDING);
+        snprintf(text, sizeof text, "%s  %s", quest_results_title(s_selected),
+                 PQ_TXT_PENDING);
         lv_obj_set_style_text_color(s_detail, lv_color_hex(PQ_COLOR_MUTED), 0);
     }
+    lv_label_set_text(s_detail, text);
 }
 
 static void build(void)
@@ -83,14 +86,20 @@ static void build(void)
         s_rows[i] = row;
     }
 
-    char text[48];
+    char text[64];
     snprintf(text, sizeof text, "%s %d/%d", PQ_TXT_QUEST_REPORT, passed, s_count);
-    pq_ui_text(s_page, text, 14, 66, &pq_font_16, PQ_COLOR_ACCENT);
+    pq_ui_text(s_page, text, 14, 64, &pq_font_16, PQ_COLOR_ACCENT);
 
-    s_detail = pq_ui_text(s_page, "", 0, 292, &pq_font_16, PQ_COLOR_MUTED);
-    lv_obj_set_width(s_detail, LV_PCT(100));
-    lv_obj_set_style_text_align(s_detail, LV_TEXT_ALIGN_CENTER, 0);
+    // 选中项的详情紧贴列表上方，避免用户以为“没有详情”。
+    s_detail = pq_ui_text(s_page, "", 14, 88, &pq_font_16, PQ_COLOR_INK);
+    lv_obj_set_width(s_detail, 212);
     detail_refresh();
+
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 10, &pq_font_16,
+                                PQ_COLOR_MUTED);
+    lv_obj_set_width(hint, 216);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(hint, 12, 12);
 }
 
 void report_open(void)
@@ -98,6 +107,10 @@ void report_open(void)
     s_active = true;
     s_selected = 0;
     build();
+    for (int i = 0; i < quest_results_count(); i++) {
+        ESP_LOGI(TAG, "  %s: %s %s", quest_results_title(i),
+                 quest_results_status_text(i), quest_results_detail(i));
+    }
     ESP_LOGI(TAG, "报告页已建立");
 }
 

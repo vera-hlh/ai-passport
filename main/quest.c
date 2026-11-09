@@ -784,6 +784,11 @@ const char *quest_results_status_text(int index)
     return status_text(s_status[index]);
 }
 
+void quest_results_init(void)
+{
+    results_ensure();
+}
+
 void quest_results_clear(void)
 {
     results_clear();

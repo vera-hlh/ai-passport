@@ -272,6 +272,10 @@ void app_main(void) {
         ESP_LOGE(TAG, "NVS 初始化失败，报告将无法保存: %s", esp_err_to_name(nvs));
     }
 
+    // 报告先载入：RTC 内存掉电后内容为空，必须从 NVS 恢复，
+    // 否则报告页会在进过自检页之前一直显示“待测”。
+    quest_results_init();
+
     // 先于 UI 初始化：解码 RTC 快照、算上次睡眠的实测时长、更新漂移估计。
     pq_power_init();
     const uint32_t wake_causes = esp_sleep_get_wakeup_causes();

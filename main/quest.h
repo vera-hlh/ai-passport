@@ -17,6 +17,9 @@ void quest_close(void);
 // 自检页是否处于活动状态（按键路由用）。
 bool quest_is_active(void);
 
+// 开机早期调用一次：把 NVS 里的报告载入内存（RTC 内存失效时尤其需要）。
+void quest_results_init(void);
+
 // 报告页用的只读访问器。
 int quest_results_count(void);
 const char *quest_results_title(int index);
