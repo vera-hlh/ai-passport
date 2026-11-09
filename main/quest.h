@@ -30,5 +30,9 @@ const char *quest_results_status_text(int index);
 // 清空结果（同时写回 NVS）。
 void quest_results_clear(void);
 
+// 模拟掉电：只清 RTC 副本、保留 NVS，然后重启。开机时会走
+// “RTC 为空 → 从 NVS 恢复”的路径，与真正断电后的行为一致。
+void quest_results_simulate_power_loss(void);
+
 // 自检页按键处理，由 main.c 的输入任务调用（内部自行取/放 LVGL 锁）。
 void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev);

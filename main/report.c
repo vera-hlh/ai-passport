@@ -144,6 +144,12 @@ void report_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         bsp_lvgl_unlock();
         return;
     }
+    // 长按下键 = 模拟掉电（清 RTC、留 NVS、重启），用于验证 NVS 恢复路径。
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) {
+        quest_results_simulate_power_loss();
+        bsp_lvgl_unlock();
+        return;
+    }
     if (ev == BSP_BTN_CLICK) {
         if (btn == BSP_BTN_UP && s_count > 0) {
             s_selected = (s_selected + s_count - 1) % s_count;

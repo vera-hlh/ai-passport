@@ -17,6 +17,7 @@
 #include "ui_strings.h"
 
 #include "esp_attr.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -792,4 +793,14 @@ void quest_results_init(void)
 void quest_results_clear(void)
 {
     results_clear();
+}
+
+void quest_results_simulate_power_loss(void)
+{
+    s_results_magic = 0;
+    memset(s_status, 0, sizeof s_status);
+    memset(s_detail, 0, sizeof s_detail);
+    s_l12_recorded_count = 0;
+    ESP_LOGW(TAG, "模拟掉电：清空 RTC 结果（NVS 保留）并重启");
+    esp_restart();
 }
