@@ -19,6 +19,7 @@
 #include "power.h"
 #include "quest.h"
 #include "report.h"
+#include "focus.h"
 #include "ui_pixel.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -132,6 +133,10 @@ static void process_input(const input_event_t *input) {
     }
     if (report_is_active()) {
         report_handle_key(input->btn, input->event);
+        return;
+    }
+    if (focus_is_active()) {
+        focus_handle_key(input->btn, input->event);
         return;
     }
 
@@ -341,8 +346,11 @@ void app_main(void) {
     if (bsp_lvgl_lock(1000)) {
         const pq_power_info_t *power = pq_power_info();
         if (power->restored && power->mode == 1) {
-            // 从自检关卡的深睡醒来：直接回到 L12 关卡页，第一眼就能看到实测结果。
+            // 从自检关卡的深睡醒来：直接回到 L12 关卡页看实测结果。
             quest_open_last_sleep();
+        } else if (power->restored && (power->mode == 2 || power->mode == 3)) {
+            // 从番茄钟的深睡醒来：回到番茄钟，按剩余时间进入暂停/完成状态。
+            focus_open();
         } else {
             app_home_open();
         }

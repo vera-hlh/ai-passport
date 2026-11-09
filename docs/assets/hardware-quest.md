@@ -227,10 +227,10 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | Stage | Content | Acceptance |
 | --- | --- | --- |
 | M1 | `power`, home screen, CJK font probe, L12 short deep sleep | done: passed on device 2026-11-08, see section 14 |
-| M2 | L1–L5 (display, backlight, keys, I2C, battery) | five levels pass and produce the first report |
+| M2 | L1–L5 (display, backlight, keys, I2C, battery) | done: all five passed on device 2026-11-09, see section 15 |
 | M3 | L6–L8 (speaker, microphone, loopback) | loopback is recognisable; microphone level above baseline |
 | M4 | L9–L11 (BLE, Wi-Fi, NVS) | phone writes and reads back; counter survives reboot |
-| M5 | full focus timer, report screen, serial screenshot export (optional) | one complete 25-minute round with recorded error |
+| M5 | serial screenshot export and an optional data partition | one complete 25-minute round with recorded error |
 
 ## 13. Risks and open questions
 
@@ -266,3 +266,37 @@ Two engineering conclusions follow:
 
 - keep the drift tolerance and clamp as they are: a measured +2.61% shows the ±5% window is right, and a narrower one would reject normal samples;
 - the fuel-gauge recovery belongs in the BSP: any application calling `bsp_battery_sleep()` before deep sleep hits the same state, and `bsp_battery_recover()` should be called unconditionally after initialisation (it returns immediately when readings are sane).
+
+## 15. M2/M3 device results (2026-11-09)
+
+| Item | Result |
+| --- | --- |
+| L1 display | five colours plus 16-step grayscale, confirmed by eye |
+| L2 backlight | ten steps 10–100%, all distinguishable |
+| L3 I2C scan | `0x18` and `0x63` both respond |
+| L4 fuel gauge | 98% / 4162 mV, two reads agree |
+| L5 keys | three clicks plus a long press, voltages inside the `bsp_pins.h` windows |
+| Report page | six levels with per-level detail, up/down switching |
+| NVS persistence | restored after a simulated power loss |
+
+Defects found on hardware and fixed in code:
+
+1. **Key test sampled the wrong moment**: `BSP_BTN_CLICK` fires after release, when the ADC is
+   already back at the released voltage. Sample on `BSP_BTN_PRESS` and use CLICK/LONG only for
+   the event type.
+2. **Sleep duration included the boot time**: RTC keeps running after wake, but the code read it
+   only in `app_main`, so roughly 300 ms of bootloader and init were counted as sleep. The drift
+   estimator absorbed that and inflated every request until the 10 s level exceeded tolerance.
+   Subtract the awake time and accept only ±0.5% samples (the sleep timer and RTC share a clock).
+3. **Results lived in normal RAM**: any L12 deep sleep cleared them. They now live in RTC memory
+   with an NVS copy for power loss.
+4. **Report page loaded too late**: NVS was only read when the self-check page opened first, so a
+   cold boot showed an empty report. Load right after `nvs_flash_init()`.
+5. **Testing**: the device runs from a battery, so unplugging USB never loses power. A long press
+   on DOWN in the report page simulates a power loss (drops RTC, keeps NVS, restarts).
+
+Interaction conventions in the current build:
+
+- report page: up/down switch, long OK back, long UP clear, long DOWN simulated power loss;
+- focus timer: OK starts or resumes, long OK leaves the round, long UP toggles 25/5 and 1/1 minute;
+- the report page carries a permanent "flashing the merged image resets the report" note.

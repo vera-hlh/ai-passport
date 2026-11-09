@@ -19,9 +19,9 @@
 
 static const char *TAG = "pq_report";
 
-#define ROW_Y0 112
-#define ROW_STEP 32
-#define ROW_H 32
+#define ROW_Y0 104
+#define ROW_STEP 30
+#define ROW_H 30
 #define MAX_ROWS 8
 
 static lv_obj_t *s_page;
@@ -94,6 +94,11 @@ static void build(void)
     s_detail = pq_ui_text(s_page, "", 14, 88, &pq_font_16, PQ_COLOR_INK);
     lv_obj_set_width(s_detail, 212);
     detail_refresh();
+
+    lv_obj_t *warn = pq_ui_text(s_page, PQ_TXT_FLASH_WARNING, 0, 292, &pq_font_16,
+                                PQ_COLOR_WARN);
+    lv_obj_set_width(warn, LV_PCT(100));
+    lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 10, &pq_font_16,
                                 PQ_COLOR_MUTED);
