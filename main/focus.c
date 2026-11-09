@@ -181,8 +181,12 @@ static void refresh(void)
     if (!s_time_label) return;
 
     char text[64];
-    if (s_state.stage == FOCUS_IDLE || s_state.stage == FOCUS_DONE_FOCUS ||
-        s_state.stage == FOCUS_DONE_BREAK) {
+    if (s_state.stage == FOCUS_IDLE) {
+        // 空闲页的大时间跟随“正在调整的那一项”，否则切到休息时数字不动，很费解。
+        format_mmss(text, sizeof text,
+                    s_state.editing_break ? break_length_us() : focus_length_us());
+    } else if (s_state.stage == FOCUS_DONE_FOCUS ||
+               s_state.stage == FOCUS_DONE_BREAK) {
         const uint64_t next = (s_state.stage == FOCUS_DONE_FOCUS)
                               ? break_length_us() : focus_length_us();
         format_mmss(text, sizeof text, next);
@@ -268,6 +272,11 @@ static void restore_from_wake(void)
     if (remaining <= 1000000ULL) {
         remaining = 0;
         s_state.stage = is_focus ? FOCUS_DONE_FOCUS : FOCUS_DONE_BREAK;
+        if (!is_focus) {
+            // 一轮番茄 = 专注 + 休息，休息睡满就记账，不等用户按确定。
+            s_state.completed++;
+            settings_save();
+        }
     } else {
         s_state.stage = is_focus ? FOCUS_PAUSED_FOCUS : FOCUS_PAUSED_BREAK;
     }
@@ -293,9 +302,10 @@ void focus_open(void)
     s_break_setting = pq_ui_text(s_page, "", 14, 192, &pq_font_16, PQ_COLOR_MUTED);
     s_notice = pq_ui_text(s_page, "", 14, 230, &pq_font_16, PQ_COLOR_WARN);
 
-    s_hint_label = pq_ui_text(s_page, "", 0, 286, &pq_font_16, PQ_COLOR_MUTED);
-    lv_obj_set_width(s_hint_label, LV_PCT(100));
+    s_hint_label = pq_ui_text(s_page, "", 12, 262, &pq_font_16, PQ_COLOR_MUTED);
+    lv_obj_set_width(s_hint_label, 216);
     lv_obj_set_style_text_align(s_hint_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_hint_label, LV_LABEL_LONG_WRAP);
 
     refresh();
     ESP_LOGI(TAG, "番茄钟页已建立, stage=%d %u/%u 分钟", (int)s_state.stage,
@@ -370,10 +380,6 @@ void focus_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     // ---------- 其它状态：长按确定返回/回空闲，长按上键放弃 ----------
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        if (s_state.stage == FOCUS_DONE_BREAK) {
-            s_state.completed++;
-            settings_save();
-        }
         s_state.stage = FOCUS_IDLE;
         s_state.remaining_us = 0;
         set_notice("");
@@ -411,8 +417,6 @@ void focus_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             start_sleep(POWER_MODE_BREAK);
             return;
         case FOCUS_DONE_BREAK:
-            s_state.completed++;
-            settings_save();
             s_state.stage = FOCUS_IDLE;
             s_state.remaining_us = 0;
             refresh();
