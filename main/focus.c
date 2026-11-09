@@ -1,4 +1,4 @@
-// main/focus.c —— 番茄钟：专注 / 休息都用深睡实现。
+// main/focus.c —— 番茄钟：专注 / 休息都用深睡实现，时长可自设。
 //
 // 为什么用深睡：这块板子上“专注 25 分钟”最省电的形态就是让芯片睡着，屏幕自然熄。
 // 唤醒源与自检关卡共用 power 模块，定时精度、按键中止、电量计恢复这些路径已经在
@@ -7,7 +7,8 @@
 // 暂停语义：深睡不能暂停 RTC，所以“暂停”= 醒来后把剩余时长留在 RTC 里不再武装；
 // 按“继续”时用剩余时长重新入睡。任何按键都会叫醒设备，正好用来暂停/中止。
 //
-// 长按上键：空闲时在 25/5 分钟与 1/1 分钟短档之间切换（短档只用于调试）。
+// 时长设置：空闲页用上下键调“专注 / 休息”的分钟数（长按上键切换正在调的那一项），
+// 设置存 RTC（跨深睡）并同步到 NVS（跨掉电）。
 #include "focus.h"
 
 #include "app_home.h"
@@ -22,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "nvs.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,12 +32,16 @@
 static const char *TAG = "pq_focus";
 
 #define FOCUS_MAGIC 0x464f4331u   // 'FOC1'
-
-#define FOCUS_DEFAULT_US (25ULL * 60ULL * 1000ULL * 1000ULL)
-#define BREAK_DEFAULT_US (5ULL * 60ULL * 1000ULL * 1000ULL)
+#define FOCUS_NVS_NAMESPACE "pq_focus"
+#define FOCUS_NVS_KEY "cfg"
 
 #define POWER_MODE_FOCUS 2
 #define POWER_MODE_BREAK 3
+
+#define FOCUS_MIN_DEFAULT 25
+#define BREAK_MIN_DEFAULT 5
+#define FOCUS_MIN_LIMIT 120
+#define BREAK_MIN_LIMIT 60
 
 typedef enum {
     FOCUS_IDLE = 0,
@@ -50,19 +56,68 @@ typedef enum {
 typedef struct {
     uint32_t magic;
     uint8_t stage;
-    uint8_t short_mode;
+    uint8_t editing_break;   // 空闲时正在调整哪一项：0 专注 / 1 休息
+    uint16_t focus_min;
+    uint16_t break_min;
     uint64_t remaining_us;
     uint32_t completed;
 } focus_state_t;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint16_t focus_min;
+    uint16_t break_min;
+    uint32_t completed;
+} focus_nvs_t;
+
+#define FOCUS_NVS_MAGIC 0x464e5631u   // 'FNV1'
 
 static RTC_DATA_ATTR focus_state_t s_state;
 static lv_obj_t *s_page;
 static lv_obj_t *s_stage_label;
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_count_label;
+static lv_obj_t *s_focus_setting;
+static lv_obj_t *s_break_setting;
 static lv_obj_t *s_hint_label;
 static lv_obj_t *s_notice;
 static bool s_active;
+
+static void settings_save(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(FOCUS_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+    focus_nvs_t blob = {
+        .magic = FOCUS_NVS_MAGIC,
+        .version = 1,
+        .focus_min = s_state.focus_min,
+        .break_min = s_state.break_min,
+        .completed = s_state.completed,
+    };
+    esp_err_t e = nvs_set_blob(handle, FOCUS_NVS_KEY, &blob, sizeof blob);
+    if (e == ESP_OK) e = nvs_commit(handle);
+    if (e != ESP_OK) ESP_LOGW(TAG, "番茄钟设置写入 NVS 失败: %s", esp_err_to_name(e));
+    nvs_close(handle);
+}
+
+static void settings_load(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(FOCUS_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return;
+    focus_nvs_t blob;
+    size_t len = sizeof blob;
+    const bool ok = nvs_get_blob(handle, FOCUS_NVS_KEY, &blob, &len) == ESP_OK &&
+                    len == sizeof blob && blob.magic == FOCUS_NVS_MAGIC;
+    nvs_close(handle);
+    if (!ok) return;
+    s_state.focus_min = blob.focus_min ? blob.focus_min : FOCUS_MIN_DEFAULT;
+    s_state.break_min = blob.break_min ? blob.break_min : BREAK_MIN_DEFAULT;
+    s_state.completed = blob.completed;
+    ESP_LOGI(TAG, "已从 NVS 恢复番茄钟设置: %u/%u 分钟, 已完成 %lu",
+             (unsigned)s_state.focus_min, (unsigned)s_state.break_min,
+             (unsigned long)s_state.completed);
+}
 
 static void ensure_state(void)
 {
@@ -70,16 +125,19 @@ static void ensure_state(void)
     memset(&s_state, 0, sizeof s_state);
     s_state.magic = FOCUS_MAGIC;
     s_state.stage = FOCUS_IDLE;
+    s_state.focus_min = FOCUS_MIN_DEFAULT;
+    s_state.break_min = BREAK_MIN_DEFAULT;
+    settings_load();
 }
 
 static uint64_t focus_length_us(void)
 {
-    return s_state.short_mode ? 60ULL * 1000ULL * 1000ULL : FOCUS_DEFAULT_US;
+    return (uint64_t)s_state.focus_min * 60ULL * 1000000ULL;
 }
 
 static uint64_t break_length_us(void)
 {
-    return s_state.short_mode ? 60ULL * 1000ULL * 1000ULL : BREAK_DEFAULT_US;
+    return (uint64_t)s_state.break_min * 60ULL * 1000000ULL;
 }
 
 static void format_mmss(char *buf, size_t len, uint64_t remaining_us)
@@ -110,7 +168,7 @@ static const char *stage_text(void)
 static const char *hint_text(void)
 {
     switch (s_state.stage) {
-        case FOCUS_IDLE: return PQ_TXT_HINT_START;
+        case FOCUS_IDLE: return PQ_TXT_HINT_IDLE;
         case FOCUS_PAUSED_FOCUS:
         case FOCUS_PAUSED_BREAK: return PQ_TXT_HINT_PAUSE;
         case FOCUS_DONE_FOCUS: return PQ_TXT_HINT_BREAK;
@@ -125,7 +183,6 @@ static void refresh(void)
     char text[64];
     if (s_state.stage == FOCUS_IDLE || s_state.stage == FOCUS_DONE_FOCUS ||
         s_state.stage == FOCUS_DONE_BREAK) {
-        // 空闲或已完成档：显示“下一步”会睡多久，避免屏幕上停在 00:00。
         const uint64_t next = (s_state.stage == FOCUS_DONE_FOCUS)
                               ? break_length_us() : focus_length_us();
         format_mmss(text, sizeof text, next);
@@ -135,13 +192,29 @@ static void refresh(void)
     lv_label_set_text(s_time_label, text);
 
     lv_label_set_text(s_stage_label, stage_text());
-    lv_obj_set_style_text_color(s_stage_label,
-        lv_color_hex(PQ_COLOR_ACCENT), 0);
+    lv_obj_set_style_text_color(s_stage_label, lv_color_hex(PQ_COLOR_ACCENT), 0);
 
     char count[48];
     snprintf(count, sizeof count, "%s %lu", PQ_TXT_COMPLETED,
              (unsigned long)s_state.completed);
     lv_label_set_text(s_count_label, count);
+
+    // 空闲时显示两项设置，正在调整的那项用高亮色。
+    if (s_state.stage == FOCUS_IDLE) {
+        snprintf(text, sizeof text, "%s %u %s", PQ_TXT_FOCUS_STAGE,
+                 (unsigned)s_state.focus_min, PQ_TXT_MINUTES);
+        lv_label_set_text(s_focus_setting, text);
+        snprintf(text, sizeof text, "%s %u %s", PQ_TXT_BREAK_STAGE,
+                 (unsigned)s_state.break_min, PQ_TXT_MINUTES);
+        lv_label_set_text(s_break_setting, text);
+        lv_obj_set_style_text_color(s_focus_setting,
+            lv_color_hex(s_state.editing_break ? PQ_COLOR_MUTED : PQ_COLOR_INK), 0);
+        lv_obj_set_style_text_color(s_break_setting,
+            lv_color_hex(s_state.editing_break ? PQ_COLOR_INK : PQ_COLOR_MUTED), 0);
+    } else if (s_focus_setting && s_break_setting) {
+        lv_label_set_text(s_focus_setting, "");
+        lv_label_set_text(s_break_setting, "");
+    }
 
     if (s_hint_label) lv_label_set_text(s_hint_label, hint_text());
 }
@@ -162,11 +235,9 @@ static void start_sleep(int mode)
         bsp_lvgl_unlock();
     }
 
-    // 让“正在入睡”这一帧先画出来，再熄屏入睡。
     vTaskDelay(pdMS_TO_TICKS(350));
 
     esp_err_t err = pq_power_sleep(s_state.remaining_us, (uint32_t)mode, 0);
-    // 只有失败才会回到这里。
     ESP_LOGE(TAG, "入睡失败: %s", esp_err_to_name(err));
     if (bsp_lvgl_lock(300)) {
         s_state.stage = (mode == POWER_MODE_FOCUS) ? FOCUS_PAUSED_FOCUS
@@ -177,9 +248,6 @@ static void start_sleep(int mode)
     }
 }
 
-// 用 power 记下的“武装时长 − 实测睡眠”恢复剩余时间。
-// 只在状态是 ACTIVE 时调用：那是“我们确实从这一页睡过去”的唯一证据，
-// 否则从主屏再进本页会拿上一次的唤醒信息重复恢复。
 static void restore_from_wake(void)
 {
     if (!stage_is_active()) return;
@@ -217,17 +285,21 @@ void focus_open(void)
     s_active = true;
     s_page = pq_ui_page_create(PQ_TXT_FOCUS);
 
-    s_stage_label = pq_ui_text(s_page, "", 14, 62, &pq_font_16, PQ_COLOR_ACCENT);
-    s_time_label = pq_ui_text(s_page, "", 14, 92, &pq_font_20, PQ_COLOR_INK);
-    s_count_label = pq_ui_text(s_page, "", 14, 132, &pq_font_16, PQ_COLOR_MUTED);
-    s_notice = pq_ui_text(s_page, "", 14, 200, &pq_font_16, PQ_COLOR_WARN);
+    s_stage_label = pq_ui_text(s_page, "", 14, 56, &pq_font_16, PQ_COLOR_ACCENT);
+    s_time_label = pq_ui_text(s_page, "", 14, 86, &pq_font_20, PQ_COLOR_INK);
+    s_count_label = pq_ui_text(s_page, "", 14, 126, &pq_font_16, PQ_COLOR_MUTED);
+
+    s_focus_setting = pq_ui_text(s_page, "", 14, 164, &pq_font_16, PQ_COLOR_INK);
+    s_break_setting = pq_ui_text(s_page, "", 14, 192, &pq_font_16, PQ_COLOR_MUTED);
+    s_notice = pq_ui_text(s_page, "", 14, 230, &pq_font_16, PQ_COLOR_WARN);
 
     s_hint_label = pq_ui_text(s_page, "", 0, 286, &pq_font_16, PQ_COLOR_MUTED);
     lv_obj_set_width(s_hint_label, LV_PCT(100));
     lv_obj_set_style_text_align(s_hint_label, LV_TEXT_ALIGN_CENTER, 0);
 
     refresh();
-    ESP_LOGI(TAG, "番茄钟页已建立, stage=%d", (int)s_state.stage);
+    ESP_LOGI(TAG, "番茄钟页已建立, stage=%d %u/%u 分钟", (int)s_state.stage,
+             (unsigned)s_state.focus_min, (unsigned)s_state.break_min);
 }
 
 bool focus_is_active(void)
@@ -239,21 +311,68 @@ static void close_to_home(void)
 {
     s_active = false;
     pq_ui_page_delete(&s_page);
-    s_stage_label = s_time_label = s_count_label = s_hint_label = s_notice = NULL;
+    s_stage_label = s_time_label = s_count_label = NULL;
+    s_focus_setting = s_break_setting = s_hint_label = s_notice = NULL;
     app_home_open();
 }
 
 void focus_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_active) return;
+    if (!bsp_lvgl_lock(300)) return;
 
-    // 长按确定：空闲时回主屏；其余状态放弃本轮回空闲。
-    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        if (!bsp_lvgl_lock(300)) return;
-        if (s_state.stage == FOCUS_IDLE) {
+    // ---------- 空闲：上下调时长、长按上键切项、确定开始 ----------
+    if (s_state.stage == FOCUS_IDLE) {
+        if (ev == BSP_BTN_LONG && btn == BSP_BTN_UP) {
+            s_state.editing_break = s_state.editing_break ? 0 : 1;
+            set_notice("");
+            refresh();
+            bsp_lvgl_unlock();
+            return;
+        }
+        if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+            settings_save();
             close_to_home();
             bsp_lvgl_unlock();
             return;
+        }
+        // 单击 ±1 分钟；双击 ±5 分钟，省得从 25 调到 1 要按 24 次。
+        if ((ev == BSP_BTN_CLICK || ev == BSP_BTN_DOUBLE) &&
+            (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) {
+            const int step = (ev == BSP_BTN_DOUBLE) ? 5 : 1;
+            const int delta = (btn == BSP_BTN_UP) ? step : -step;
+            if (s_state.editing_break) {
+                int value = (int)s_state.break_min + delta;
+                if (value < 1) value = 1;
+                if (value > BREAK_MIN_LIMIT) value = BREAK_MIN_LIMIT;
+                s_state.break_min = (uint16_t)value;
+            } else {
+                int value = (int)s_state.focus_min + delta;
+                if (value < 1) value = 1;
+                if (value > FOCUS_MIN_LIMIT) value = FOCUS_MIN_LIMIT;
+                s_state.focus_min = (uint16_t)value;
+            }
+            set_notice("");
+            refresh();
+            bsp_lvgl_unlock();
+            return;
+        }
+        if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+            s_state.remaining_us = focus_length_us();
+            settings_save();
+            bsp_lvgl_unlock();
+            start_sleep(POWER_MODE_FOCUS);
+            return;
+        }
+        bsp_lvgl_unlock();
+        return;
+    }
+
+    // ---------- 其它状态：长按确定返回/回空闲，长按上键放弃 ----------
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        if (s_state.stage == FOCUS_DONE_BREAK) {
+            s_state.completed++;
+            settings_save();
         }
         s_state.stage = FOCUS_IDLE;
         s_state.remaining_us = 0;
@@ -262,51 +381,44 @@ void focus_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         bsp_lvgl_unlock();
         return;
     }
-
-    // 长按上键：空闲时切换长短档；运行/暂停/完成状态放弃本轮。
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_UP) {
-        if (!bsp_lvgl_lock(300)) return;
-        if (s_state.stage == FOCUS_IDLE) {
-            s_state.short_mode = s_state.short_mode ? 0 : 1;
-            set_notice(s_state.short_mode ? PQ_TXT_SHORT_MODE : PQ_TXT_LONG_MODE);
-        } else {
-            s_state.stage = FOCUS_IDLE;
-            s_state.remaining_us = 0;
-            set_notice(PQ_TXT_GIVE_UP);
-        }
-        refresh();
-        bsp_lvgl_unlock();
-        return;
-    }
-
-    if (ev != BSP_BTN_CLICK || btn != BSP_BTN_OK) return;
-
-    // 需要入睡的分支：先确认当前状态，再取一次锁把状态写进 RTC，然后交给 start_sleep。
-    focus_stage_t stage = s_state.stage;
-    if (stage == FOCUS_PAUSED_FOCUS || stage == FOCUS_PAUSED_BREAK) {
-        start_sleep(stage == FOCUS_PAUSED_FOCUS ? POWER_MODE_FOCUS : POWER_MODE_BREAK);
-        return;
-    }
-    if (stage == FOCUS_DONE_FOCUS) {
-        if (!bsp_lvgl_lock(300)) return;
-        s_state.remaining_us = break_length_us();
-        bsp_lvgl_unlock();
-        start_sleep(POWER_MODE_BREAK);
-        return;
-    }
-    if (stage == FOCUS_IDLE) {
-        if (!bsp_lvgl_lock(300)) return;
-        s_state.remaining_us = focus_length_us();
-        bsp_lvgl_unlock();
-        start_sleep(POWER_MODE_FOCUS);
-        return;
-    }
-    if (stage == FOCUS_DONE_BREAK) {
-        if (!bsp_lvgl_lock(300)) return;
-        s_state.completed++;
         s_state.stage = FOCUS_IDLE;
         s_state.remaining_us = 0;
+        set_notice(PQ_TXT_GIVE_UP);
         refresh();
         bsp_lvgl_unlock();
+        return;
     }
+    if (ev != BSP_BTN_CLICK || btn != BSP_BTN_OK) {
+        bsp_lvgl_unlock();
+        return;
+    }
+
+    switch (s_state.stage) {
+        case FOCUS_PAUSED_FOCUS:
+            bsp_lvgl_unlock();
+            start_sleep(POWER_MODE_FOCUS);
+            return;
+        case FOCUS_PAUSED_BREAK:
+            bsp_lvgl_unlock();
+            start_sleep(POWER_MODE_BREAK);
+            return;
+        case FOCUS_DONE_FOCUS:
+            s_state.remaining_us = break_length_us();
+            set_notice("");
+            refresh();
+            bsp_lvgl_unlock();
+            start_sleep(POWER_MODE_BREAK);
+            return;
+        case FOCUS_DONE_BREAK:
+            s_state.completed++;
+            settings_save();
+            s_state.stage = FOCUS_IDLE;
+            s_state.remaining_us = 0;
+            refresh();
+            break;
+        default:
+            break;
+    }
+    bsp_lvgl_unlock();
 }
