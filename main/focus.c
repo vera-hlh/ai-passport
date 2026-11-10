@@ -116,16 +116,48 @@ static void play_tone(uint32_t ms, uint32_t hz)
 }
 
 // 到点提示：3 组 × 3 声，组内短间隔、组间长间隔。
+//
+// 整段波形一次性生成、分块写出：不重复调用 set_format，也不靠 vTaskDelay 分隔。
+// 之前“每声都重新开 codec + 靠延时”的写法实测只有第一组响得出来。
 static void play_alarm(void)
 {
+    typedef struct { uint32_t tone_ms; uint32_t silence_ms; } segment_t;
+    static const segment_t PATTERN[] = {
+        { 90, 70 }, { 90, 70 }, { 90, 260 },   // 第 1 组
+        { 90, 70 }, { 90, 70 }, { 90, 260 },   // 第 2 组
+        { 90, 70 }, { 90, 70 }, { 90, 400 },   // 第 3 组 + 收尾静音
+    };
+    static int16_t buf[256];
+
+    if (bsp_audio_set_format(16000, 16, 1) != ESP_OK) return;
     bsp_audio_set_volume(80);
-    for (int group = 0; group < 3; group++) {
-        for (int beep = 0; beep < 3; beep++) {
-            play_tone(90, 2000);
-            vTaskDelay(pdMS_TO_TICKS(70));
+
+    const uint32_t half = 8000U / 2000U;   // 2 kHz 方波
+    uint32_t phase = 0;
+
+    for (size_t s = 0; s < sizeof PATTERN / sizeof PATTERN[0]; s++) {
+        const uint32_t tone_samples = 16000U * PATTERN[s].tone_ms / 1000U;
+        for (uint32_t done = 0; done < tone_samples;) {
+            uint32_t n = tone_samples - done;
+            if (n > sizeof buf / sizeof buf[0]) n = sizeof buf / sizeof buf[0];
+            for (uint32_t i = 0; i < n; i++) {
+                buf[i] = (phase < half) ? 5000 : -5000;
+                if (++phase >= half * 2) phase = 0;
+            }
+            bsp_audio_write(buf, n * 2);
+            done += n;
         }
-        vTaskDelay(pdMS_TO_TICKS(260));
+
+        const uint32_t silence_samples = 16000U * PATTERN[s].silence_ms / 1000U;
+        for (uint32_t done = 0; done < silence_samples;) {
+            uint32_t n = silence_samples - done;
+            if (n > sizeof buf / sizeof buf[0]) n = sizeof buf / sizeof buf[0];
+            memset(buf, 0, n * 2);
+            bsp_audio_write(buf, n * 2);
+            done += n;
+        }
     }
+    ESP_LOGI(TAG, "到点提示音已播放");
 }
 
 // ------------------------------------------------------------------ 状态与持久化
