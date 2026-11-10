@@ -300,3 +300,18 @@ Interaction conventions in the current build:
 - report page: up/down switch, long OK back, long UP clear, long DOWN simulated power loss;
 - focus timer: OK starts or resumes, long OK leaves the round, long UP toggles 25/5 and 1/1 minute;
 - the report page carries a permanent "flashing the merged image resets the report" note.
+
+### Focus timer (M4, 2026-11-10 hardware)
+
+- Durations are configurable: single click ±1 minute, double click ±5, long UP switches between focus and
+  break; values live in RTC (across deep sleep) and NVS (across power loss).
+- The bulk of a round still sleeps; **the last 60 seconds run awake with an on-screen countdown**
+  (`COUNTDOWN_US`). A round shorter than a minute skips sleep entirely, which also makes testing quick.
+- The final five seconds beep once per second; the round ends with three groups of three beeps
+  (70 ms inside a group, 700 ms between groups). The whole pattern is streamed as one waveform —
+  reopening the codec per beep and separating them with `vTaskDelay` only produced the first group.
+- Finished states show `00:00` plus a "next: …" line; a round counts as completed only when both the
+  focus and the break have run to the end.
+- Power trade-off: the last minute keeps the screen on, costing tens of milliamps more than sleeping all
+  the way through. Shrinking `COUNTDOWN_US` is enough to trade it back without touching the state machine.
+- Pressing OK on the report page exports it over the serial port, a second retention path next to NVS.

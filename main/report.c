@@ -27,6 +27,7 @@ static const char *TAG = "pq_report";
 static lv_obj_t *s_page;
 static lv_obj_t *s_rows[MAX_ROWS];
 static lv_obj_t *s_detail;
+static lv_obj_t *s_warn;
 static int s_count;
 static int s_selected;
 static bool s_active;
@@ -97,10 +98,11 @@ static void build(void)
 
     lv_obj_t *warn = pq_ui_text(s_page, PQ_TXT_FLASH_WARNING, 0, 292, &pq_font_16,
                                 PQ_COLOR_WARN);
+    s_warn = warn;
     lv_obj_set_width(warn, LV_PCT(100));
     lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_BACK_HINT, 0, 10, &pq_font_16,
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_HINT_EXPORT, 0, 10, &pq_font_16,
                                 PQ_COLOR_MUTED);
     lv_obj_set_width(hint, 216);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_RIGHT, 0);
@@ -152,6 +154,20 @@ void report_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     // 长按下键 = 模拟掉电（清 RTC、留 NVS、重启），用于验证 NVS 恢复路径。
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) {
         quest_results_simulate_power_loss();
+        bsp_lvgl_unlock();
+        return;
+    }
+    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+        // 确定 = 把当前报告导出到串口（NVS 之外的留档方式）。
+        ESP_LOGI(TAG, "==== 导出 %s ====", PQ_TXT_QUEST_REPORT);
+        for (int i = 0; i < s_count; i++) {
+            ESP_LOGI(TAG, "  %d. %s: %s %s", i + 1, quest_results_title(i),
+                     quest_results_status_text(i), quest_results_detail(i));
+        }
+        if (s_warn) {
+            lv_label_set_text(s_warn, PQ_TXT_EXPORTED);
+            lv_obj_set_style_text_color(s_warn, lv_color_hex(PQ_COLOR_OK), 0);
+        }
         bsp_lvgl_unlock();
         return;
     }
