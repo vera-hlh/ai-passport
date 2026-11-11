@@ -98,6 +98,23 @@
 #define PQ_TXT_SHORT_MODE    "1 分钟短档"
 #define PQ_TXT_LONG_MODE     "25/5 档"
 
+
+// 音频关卡（M5）
+#define PQ_TXT_LEVEL_SPEAKER "喇叭测试"
+#define PQ_TXT_LEVEL_MIC     "麦克风测试"
+#define PQ_TXT_LEVEL_LOOPBACK "回环测试"
+#define PQ_TXT_SWEEP         "扫频中"
+#define PQ_TXT_VOLUME        "音量"
+#define PQ_TXT_ENERGY        "能量"
+#define PQ_TXT_PEAK          "峰值"
+#define PQ_TXT_RECORDING     "录音中"
+#define PQ_TXT_PLAYING       "播放中"
+#define PQ_TXT_TESTING       "测试中"
+#define PQ_TXT_SPEAK_NOW     "请说话"
+#define PQ_TXT_DUPLEX        "同时收发"
+#define PQ_TXT_RECOGNIZABLE  "可辨认"
+#define PQ_TXT_PRESS_OK_RUN  "确定 开始测试"
+
 static const char *const PQ_UI_STRINGS[] = {
     PQ_TXT_HOME_TITLE, PQ_TXT_BATTERY, PQ_TXT_WAKE_COUNT, PQ_TXT_LAST_SLEEP,
     PQ_TXT_SELF_CHECK, PQ_TXT_FOCUS, PQ_TXT_REPORT, PQ_TXT_LEGACY,

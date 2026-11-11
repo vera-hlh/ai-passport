@@ -7,6 +7,7 @@
 
 #include "app_home.h"
 #include "bsp_battery.h"
+#include "bsp_audio.h"
 #include "bsp_button.h"
 #include "bsp_display.h"
 #include "bsp_i2c.h"
@@ -25,16 +26,22 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
+#include <math.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "pq_quest";
 
-#define LEVEL_COUNT 6
+#define LEVEL_COUNT 9
 #define L12_INDEX (LEVEL_COUNT - 1)
 #define L5_INDEX 4
+#define L6_INDEX 5
+#define L7_INDEX 6
+#define L8_INDEX 7
+#define LIST_VISIBLE 6
 #define ROW_Y0 96
 #define ROW_STEP 32
 #define ROW_H 32
@@ -57,6 +64,9 @@ static void l2_enter(void); static void l2_key(bsp_btn_t, bsp_btn_ev_t);
 static void l3_enter(void); static void l3_key(bsp_btn_t, bsp_btn_ev_t);
 static void l4_enter(void); static void l4_key(bsp_btn_t, bsp_btn_ev_t);
 static void l5_enter(void); static void l5_key(bsp_btn_t, bsp_btn_ev_t);
+static void l6_enter(void); static void l6_key(bsp_btn_t, bsp_btn_ev_t);
+static void l7_enter(void); static void l7_key(bsp_btn_t, bsp_btn_ev_t);
+static void l8_enter(void); static void l8_key(bsp_btn_t, bsp_btn_ev_t);
 static void l12_enter(void); static void l12_key(bsp_btn_t, bsp_btn_ev_t);
 
 static const quest_level_t LEVELS[LEVEL_COUNT] = {
@@ -65,6 +75,9 @@ static const quest_level_t LEVELS[LEVEL_COUNT] = {
     { PQ_TXT_LEVEL_I2C, l3_enter, l3_key },
     { PQ_TXT_LEVEL_BATTERY, l4_enter, l4_key },
     { PQ_TXT_LEVEL_BUTTON, l5_enter, l5_key },
+    { PQ_TXT_LEVEL_SPEAKER, l6_enter, l6_key },
+    { PQ_TXT_LEVEL_MIC, l7_enter, l7_key },
+    { PQ_TXT_LEVEL_LOOPBACK, l8_enter, l8_key },
     { PQ_TXT_DEEP_SLEEP, l12_enter, l12_key },
 };
 
@@ -146,6 +159,7 @@ static lv_obj_t *s_page;
 static lv_obj_t *s_row_states[LEVEL_COUNT];
 static lv_obj_t *s_summary;
 static int s_selected;
+static int s_list_offset;
 static int s_current = -1;
 static bool s_active;
 
@@ -246,11 +260,18 @@ void quest_open(void)
     s_current = -1;
 
     if (s_page) page_close();
+
+    // 9 关装不进 320 px：让列表跟着选中项滚动，而不是压缩行高。
+    if (s_selected < s_list_offset) s_list_offset = s_selected;
+    if (s_selected >= s_list_offset + LIST_VISIBLE) {
+        s_list_offset = s_selected - LIST_VISIBLE + 1;
+    }
+
     s_page = pq_ui_page_create(PQ_TXT_SELF_CHECK);
 
-    for (int i = 0; i < LEVEL_COUNT; i++) {
-        lv_obj_t *row = pq_ui_row(s_page, 12, ROW_Y0 + i * ROW_STEP, 216, ROW_H,
-                                  i == s_selected);
+    for (int i = s_list_offset; i < LEVEL_COUNT && i < s_list_offset + LIST_VISIBLE; i++) {
+        lv_obj_t *row = pq_ui_row(s_page, 12, ROW_Y0 + (i - s_list_offset) * ROW_STEP,
+                                  216, ROW_H, i == s_selected);
         lv_obj_t *name = lv_label_create(row);
         lv_obj_set_style_text_font(name, &pq_font_16, 0);
         lv_obj_set_style_text_color(name, lv_color_hex(PQ_COLOR_INK), 0);
@@ -561,6 +582,338 @@ static void l5_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         return;
     }
     l5_show();
+}
+
+
+// ------------------------------------------------------------------ 音频关卡的公共部分
+
+#define AUDIO_SAMPLE_RATE 16000
+#define AUDIO_CHUNK 512
+#define AUDIO_BUF_SAMPLES (2 * AUDIO_SAMPLE_RATE)   // 2 秒单声道 16 bit
+
+static int16_t *s_audio_buf;
+
+// 复用的录音/播放缓冲：2 秒 16 kHz 单声道 16 bit = 64 KB，从堆上申请一次。
+static bool audio_buffer_ensure(void)
+{
+    if (s_audio_buf) return true;
+    s_audio_buf = malloc(AUDIO_BUF_SAMPLES * sizeof(int16_t));
+    if (!s_audio_buf) {
+        ESP_LOGE(TAG, "音频缓冲分配失败（需要 %u 字节）",
+                 (unsigned)(AUDIO_BUF_SAMPLES * sizeof(int16_t)));
+        return false;
+    }
+    return true;
+}
+
+static bool audio_open(void)
+{
+    if (bsp_audio_set_format(AUDIO_SAMPLE_RATE, 16, 1) != ESP_OK) {
+        ESP_LOGE(TAG, "音频格式设置失败");
+        return false;
+    }
+    bsp_audio_set_volume(80);
+    return true;
+}
+
+// 采样精度用方波就够：这里只判断“有没有声音/能量多大”，不追求音质。
+static void audio_tone(uint32_t ms, uint32_t hz)
+{
+    static int16_t buf[AUDIO_CHUNK];
+    if (!audio_open()) return;
+    const uint32_t total = AUDIO_SAMPLE_RATE * ms / 1000U;
+    const uint32_t step = (uint32_t)(((uint64_t)hz << 32) / AUDIO_SAMPLE_RATE);
+    uint32_t acc = 0;
+    for (uint32_t done = 0; done < total;) {
+        uint32_t n = total - done;
+        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        for (uint32_t i = 0; i < n; i++) {
+            acc += step;
+            buf[i] = (acc & 0x80000000U) ? 4500 : -4500;
+        }
+        bsp_audio_write(buf, n * 2);
+        done += n;
+    }
+}
+
+// 200 Hz → 8 kHz 扫频 3 秒，检查频响有没有断层或破音。
+static void audio_sweep(uint32_t ms)
+{
+    static int16_t buf[AUDIO_CHUNK];
+    if (!audio_open()) return;
+    const uint32_t total = AUDIO_SAMPLE_RATE * ms / 1000U;
+    uint32_t acc = 0;
+    for (uint32_t done = 0; done < total;) {
+        uint32_t n = total - done;
+        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        for (uint32_t i = 0; i < n; i++) {
+            const float t = (float)(done + i) / (float)total;
+            const uint32_t hz = 200U + (uint32_t)(7800.0f * t);
+            acc += (uint32_t)(((uint64_t)hz << 32) / AUDIO_SAMPLE_RATE);
+            buf[i] = (acc & 0x80000000U) ? 4000 : -4000;
+        }
+        bsp_audio_write(buf, n * 2);
+        done += n;
+    }
+}
+
+static bool audio_record(int16_t *buf, uint32_t samples)
+{
+    if (!audio_open()) return false;
+    for (uint32_t done = 0; done < samples;) {
+        uint32_t n = samples - done;
+        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        if (bsp_audio_read(buf + done, n * 2) != ESP_OK) return false;
+        done += n;
+    }
+    return true;
+}
+
+static bool audio_play(const int16_t *buf, uint32_t samples)
+{
+    if (!audio_open()) return false;
+    for (uint32_t done = 0; done < samples;) {
+        uint32_t n = samples - done;
+        if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+        if (bsp_audio_write(buf + done, n * 2) != ESP_OK) return false;
+        done += n;
+    }
+    return true;
+}
+
+static int audio_rms(const int16_t *buf, uint32_t samples)
+{
+    if (!samples) return 0;
+    int64_t sum = 0;
+    for (uint32_t i = 0; i < samples; i++) sum += (int64_t)buf[i] * buf[i];
+    return (int)sqrtf((float)(sum / (int64_t)samples));
+}
+
+// Goertzel：估计录音里 1 kHz 的幅度占比，用来客观判断“同时收发”时麦克风确实拾到了喇叭的声音。
+static float audio_tone_ratio(const int16_t *buf, uint32_t samples, float hz)
+{
+    const float w = 2.0f * 3.14159265f * hz / (float)AUDIO_SAMPLE_RATE;
+    const float coeff = 2.0f * cosf(w);
+    float s1 = 0.0f, s2 = 0.0f;
+    double total = 0.0;
+    for (uint32_t i = 0; i < samples; i++) {
+        const float x = (float)buf[i];
+        const float s0 = x + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+        total += (double)x * x;
+    }
+    const float power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    const float amp = 2.0f * sqrtf(power) / (float)samples;
+    const float rms = sqrtf((float)(total / (double)samples));
+    if (rms < 1.0f) return 0.0f;
+    return amp / (rms * 1.41421356f);
+}
+
+// ------------------------------------------------------------------ L6 喇叭
+
+static lv_obj_t *s_l6_label;
+static bool s_l6_done;
+static int s_l6_vol = 60;
+
+static void l6_show(void)
+{
+    if (!s_l6_label) return;
+    if (!s_l6_done) {
+        lv_label_set_text(s_l6_label, PQ_TXT_PRESS_OK_RUN);
+        return;
+    }
+    char text[48];
+    snprintf(text, sizeof text, "%s %d%%", PQ_TXT_VOLUME, s_l6_vol);
+    lv_label_set_text(s_l6_label, text);
+}
+
+static void l6_enter(void)
+{
+    s_l6_done = false;
+    s_l6_vol = 60;
+    s_page = level_page(PQ_TXT_LEVEL_SPEAKER, &s_l6_label);
+    l6_show();
+}
+
+static void l6_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_OK) {
+        if (!s_l6_done) {
+            lv_label_set_text(s_l6_label, PQ_TXT_SWEEP);
+            bsp_lvgl_unlock();
+            audio_sweep(3000);
+            bsp_lvgl_lock(300);
+            s_l6_done = true;
+            l6_show();
+            return;
+        }
+        finish(L6_INDEX, QS_PASS, "%s %d%%", PQ_TXT_MANUAL, s_l6_vol);
+        return;
+    }
+    if (!s_l6_done) return;
+    if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
+        s_l6_vol += (btn == BSP_BTN_UP) ? 20 : -20;
+        if (s_l6_vol < 20) s_l6_vol = 20;
+        if (s_l6_vol > 100) s_l6_vol = 100;
+        bsp_audio_set_volume((uint8_t)s_l6_vol);
+        bsp_lvgl_unlock();
+        audio_tone(500, 1000);
+        bsp_lvgl_lock(300);
+        l6_show();
+    }
+}
+
+// ------------------------------------------------------------------ L7 麦克风
+
+static lv_obj_t *s_l7_label;
+static bool s_l7_done;
+static int s_l7_rms;
+static int s_l7_peak;
+
+#define MIC_RMS_THRESHOLD 300   // 16 bit 采样的 RMS 门限，说话通常在 1000 以上
+
+static void l7_show(void)
+{
+    if (!s_l7_label) return;
+    if (!s_l7_done) {
+        lv_label_set_text(s_l7_label, PQ_TXT_PRESS_OK_RUN);
+        return;
+    }
+    char text[64];
+    snprintf(text, sizeof text, "%s %d  %s %d", PQ_TXT_ENERGY, s_l7_rms,
+             PQ_TXT_PEAK, s_l7_peak);
+    lv_label_set_text(s_l7_label, text);
+}
+
+static void l7_enter(void)
+{
+    s_l7_done = false;
+    s_page = level_page(PQ_TXT_LEVEL_MIC, &s_l7_label);
+    l7_show();
+}
+
+static void l7_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_OK) {
+        if (!s_l7_done) {
+            if (!audio_buffer_ensure()) {
+                finish(L7_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                return;
+            }
+            lv_label_set_text(s_l7_label, PQ_TXT_RECORDING);
+            bsp_lvgl_unlock();
+            const bool ok = audio_record(s_audio_buf, AUDIO_SAMPLE_RATE);   // 1 秒
+            bsp_lvgl_lock(300);
+            if (!ok) {
+                finish(L7_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                return;
+            }
+            int peak = 0;
+            for (uint32_t i = 0; i < AUDIO_SAMPLE_RATE; i++) {
+                const int v = s_audio_buf[i] < 0 ? -s_audio_buf[i] : s_audio_buf[i];
+                if (v > peak) peak = v;
+            }
+            s_l7_rms = audio_rms(s_audio_buf, AUDIO_SAMPLE_RATE);
+            s_l7_peak = peak;
+            s_l7_done = true;
+            l7_show();
+            return;
+        }
+        finish(L7_INDEX, s_l7_rms >= MIC_RMS_THRESHOLD ? QS_PASS : QS_FAIL,
+               "%s %d", PQ_TXT_ENERGY, s_l7_rms);
+        return;
+    }
+}
+
+// ------------------------------------------------------------------ L8 回环
+
+static lv_obj_t *s_l8_label;
+static bool s_l8_done;
+static bool s_l8_ok;
+static float s_l8_ratio;
+
+static void l8_show(void)
+{
+    if (!s_l8_label) return;
+    if (!s_l8_done) {
+        lv_label_set_text(s_l8_label, PQ_TXT_PRESS_OK_RUN);
+        return;
+    }
+    char text[64];
+    snprintf(text, sizeof text, "%s %d%%  %s %s", PQ_TXT_DUPLEX,
+             (int)(s_l8_ratio * 100.0f), PQ_TXT_RECOGNIZABLE,
+             s_l8_ok ? PQ_TXT_PASS : PQ_TXT_FAIL);
+    lv_label_set_text(s_l8_label, text);
+}
+
+static void l8_enter(void)
+{
+    s_l8_done = false;
+    s_l8_ok = false;
+    s_l8_ratio = 0.0f;
+    s_page = level_page(PQ_TXT_LEVEL_LOOPBACK, &s_l8_label);
+    l8_show();
+}
+
+// 回环：先录 2 秒再原样播放（验证两个方向 + 字节数），
+// 再“边播 1 kHz 边录 1 秒”，用 Goertzel 判断麦克风是否拾到喇叭的声音（验证全双工）。
+static void l8_run(void)
+{
+    if (!audio_buffer_ensure()) return;
+
+    const uint32_t two_sec = AUDIO_BUF_SAMPLES;
+
+    // ① 顺序回环
+    const bool recorded = audio_record(s_audio_buf, two_sec);
+    const bool played = recorded && audio_play(s_audio_buf, two_sec);
+
+    // ② 同时收发
+    bool duplex = false;
+    if (played) {
+        const uint32_t one_sec = AUDIO_SAMPLE_RATE;
+        static int16_t tone[AUDIO_CHUNK];
+        const uint32_t step = (uint32_t)(((uint64_t)1000 << 32) / AUDIO_SAMPLE_RATE);
+        uint32_t acc = 0;
+        bool io_ok = audio_open();
+        for (uint32_t done = 0; io_ok && done < one_sec;) {
+            uint32_t n = one_sec - done;
+            if (n > AUDIO_CHUNK) n = AUDIO_CHUNK;
+            for (uint32_t i = 0; i < n; i++) {
+                acc += step;
+                tone[i] = (acc & 0x80000000U) ? 4500 : -4500;
+            }
+            if (bsp_audio_write(tone, n * 2) != ESP_OK) io_ok = false;
+            if (io_ok && bsp_audio_read(s_audio_buf + done, n * 2) != ESP_OK) io_ok = false;
+            done += n;
+        }
+        if (io_ok) {
+            s_l8_ratio = audio_tone_ratio(s_audio_buf, one_sec, 1000.0f);
+            duplex = s_l8_ratio > 0.20f;   // 拾到喇叭的 1 kHz 才算同时收发成立
+        }
+    }
+
+    s_l8_ok = recorded && played && duplex;
+    s_l8_done = true;
+    ESP_LOGI(TAG, "L8 回环: 录制=%d 播放=%d 同时收发=%d 1kHz 占比=%.2f",
+             (int)recorded, (int)played, (int)duplex, (double)s_l8_ratio);
+}
+
+static void l8_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    if (ev != BSP_BTN_CLICK || btn != BSP_BTN_OK) return;
+    if (!s_l8_done) {
+        lv_label_set_text(s_l8_label, PQ_TXT_TESTING);
+        bsp_lvgl_unlock();
+        l8_run();
+        bsp_lvgl_lock(300);
+        l8_show();
+        return;
+    }
+    finish(L8_INDEX, s_l8_ok ? QS_PASS : QS_FAIL, "%s %d%%", PQ_TXT_DUPLEX,
+           (int)(s_l8_ratio * 100.0f));
 }
 
 // ------------------------------------------------------------------ L12 深睡

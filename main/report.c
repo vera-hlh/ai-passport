@@ -22,7 +22,8 @@ static const char *TAG = "pq_report";
 #define ROW_Y0 104
 #define ROW_STEP 30
 #define ROW_H 30
-#define MAX_ROWS 8
+#define MAX_ROWS 12
+#define VISIBLE_ROWS 6
 
 static lv_obj_t *s_page;
 static lv_obj_t *s_rows[MAX_ROWS];
@@ -30,6 +31,7 @@ static lv_obj_t *s_detail;
 static lv_obj_t *s_warn;
 static int s_count;
 static int s_selected;
+static int s_offset;
 static bool s_active;
 
 static uint32_t status_color(int status)
@@ -65,11 +67,16 @@ static void build(void)
     s_count = quest_results_count();
     if (s_count > MAX_ROWS) s_count = MAX_ROWS;
 
+    if (s_selected < s_offset) s_offset = s_selected;
+    if (s_selected >= s_offset + VISIBLE_ROWS) s_offset = s_selected - VISIBLE_ROWS + 1;
+
     int passed = 0;
     for (int i = 0; i < s_count; i++) {
         if (quest_results_status(i) == 1) passed++;
-        lv_obj_t *row = pq_ui_row(s_page, 12, ROW_Y0 + i * ROW_STEP, 216, ROW_H,
-                                  i == s_selected);
+    }
+    for (int i = s_offset; i < s_count && i < s_offset + VISIBLE_ROWS; i++) {
+        lv_obj_t *row = pq_ui_row(s_page, 12, ROW_Y0 + (i - s_offset) * ROW_STEP,
+                                  216, ROW_H, i == s_selected);
         lv_obj_t *name = lv_label_create(row);
         lv_obj_set_style_text_font(name, &pq_font_16, 0);
         lv_obj_set_style_text_color(name, lv_color_hex(PQ_COLOR_INK), 0);
