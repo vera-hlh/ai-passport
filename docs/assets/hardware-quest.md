@@ -226,11 +226,14 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 
 | Stage | Content | Acceptance |
 | --- | --- | --- |
-| M1 | `power`, home screen, CJK font probe, L12 short deep sleep | done: passed on device 2026-11-08, see section 14 |
-| M2 | L1–L5 (display, backlight, keys, I2C, battery) | done: all five passed on device 2026-11-09, see section 15 |
-| M3 | L6–L8 (speaker, microphone, loopback) | loopback is recognisable; microphone level above baseline |
-| M4 | L9–L11 (BLE, Wi-Fi, NVS) | phone writes and reads back; counter survives reboot |
-| M5 | serial screenshot export and an optional data partition | one complete 25-minute round with recorded error |
+| M1 | `power`, home screen, L12 short deep sleep | passed on device 2026-11-08, see section 14 |
+| M2 | L1–L5 (display, backlight, keys, I2C, battery) | all five passed on device 2026-11-09, see section 15 |
+| M2.5 | CJK font pipeline and Chinese UI | done 2026-11-09, glyphs and layout confirmed on device |
+| M3 | report page: RAM + NVS + serial export | done 2026-11-09, verified with a simulated power loss |
+| M4 | focus timer (configurable durations, on-screen countdown, chimes) | passed on device 2026-11-10, see section 15 |
+| M5 | L6–L8 (speaker sweep, microphone recording, loopback) | not started — nothing has exercised the microphone yet |
+| M6 | L9–L11 (BLE, Wi-Fi scan, storage read/write) | not started — only the upstream demos exercise the radios |
+| M7 | serial screenshot export and an optional data partition | not started |
 
 ## 13. Risks and open questions
 
