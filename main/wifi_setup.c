@@ -80,6 +80,8 @@ static wifi_ap_record_t s_aps[MAX_APS];
 static uint16_t s_ap_count;
 static TaskHandle_t s_task;
 static volatile int s_disconnect_reason;
+static volatile bool s_phone_connected;
+static lv_timer_t *s_tick;
 
 // ------------------------------------------------------------------ 页面
 
@@ -105,11 +107,23 @@ static void refresh(void)
             }
             break;
         default:
-            lv_label_set_text(s_status, PQ_TXT_WAIT_PHONE);
-            lv_obj_set_style_text_color(s_status, lv_color_hex(PQ_COLOR_INK), 0);
+            lv_label_set_text(s_status, s_phone_connected ? PQ_TXT_PHONE_READY
+                                                          : PQ_TXT_WAIT_PHONE);
+            lv_obj_set_style_text_color(
+                s_status, lv_color_hex(s_phone_connected ? PQ_COLOR_OK : PQ_COLOR_INK), 0);
             if (s_detail) {
-                lv_label_set_text_fmt(s_detail, "%s\n%s\nhttp://192.168.4.1",
-                                      PQ_TXT_AP_SSID, PQ_TXT_OPEN_BROWSER);
+                char last[64] = "";
+                if (s_cred.ssid[0]) {
+                    snprintf(last, sizeof last, "\n%s %s", PQ_TXT_LAST_CONNECTED,
+                             s_cred.ssid);
+                }
+                if (s_phone_connected) {
+                    lv_label_set_text_fmt(s_detail, "%s\n%s\nhttp://192.168.4.1%s",
+                                          PQ_TXT_SUBMIT_HINT, PQ_TXT_AP_SSID, last);
+                } else {
+                    lv_label_set_text_fmt(s_detail, "%s\n%s\nhttp://192.168.4.1%s",
+                                          PQ_TXT_AP_SSID, PQ_TXT_OPEN_BROWSER, last);
+                }
             }
             break;
     }
@@ -295,6 +309,10 @@ static bool wifi_stack_prepare(void)
     esp_event_handler_instance_t inst;
     esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
                                         sta_event, NULL, &inst);
+    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED,
+                                        sta_event, NULL, &inst);
+    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED,
+                                        sta_event, NULL, &inst);
 
     if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) return false;
     s_stack_ready = true;
@@ -467,12 +485,28 @@ static void sta_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     (void)base;
+    if (id == WIFI_EVENT_AP_STACONNECTED) {
+        s_phone_connected = true;
+        ESP_LOGI(TAG, "手机已连上热点");
+        return;
+    }
+    if (id == WIFI_EVENT_AP_STADISCONNECTED) {
+        s_phone_connected = false;
+        ESP_LOGI(TAG, "手机已离开热点");
+        return;
+    }
     if (id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *event =
             (const wifi_event_sta_disconnected_t *)data;
         s_disconnect_reason = event ? event->reason : -1;
         ESP_LOGW(TAG, "STA 断开, reason=%d", s_disconnect_reason);
     }
+}
+
+static void tick_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    refresh();
 }
 
 // ------------------------------------------------------------------ 连接任务
@@ -533,6 +567,7 @@ void wifi_setup_open(void)
 {
     s_active = true;
     s_state = SETUP_IDLE;
+    s_phone_connected = false;
     s_connect_requested = false;
     s_ip[0] = 0;
     s_ap_count = 0;
@@ -560,6 +595,7 @@ void wifi_setup_open(void)
         return;
     }
     http_start();
+    if (!s_tick) s_tick = lv_timer_create(tick_cb, 500, NULL);
     if (!s_task) {
         xTaskCreate(connect_task, "wifi_setup", 4096, NULL, 4, &s_task);
     }
@@ -573,6 +609,10 @@ bool wifi_setup_is_active(void)
 static void close_to_home(void)
 {
     s_active = false;
+    if (s_tick) {
+        lv_timer_delete(s_tick);
+        s_tick = NULL;
+    }
     vTaskDelay(pdMS_TO_TICKS(250));   // 让连接任务看到 s_active 并自己退出
     spiffs_unmount();
     wifi_session_stop();
