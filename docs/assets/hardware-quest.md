@@ -232,8 +232,8 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | M3 | report page: RAM + NVS + serial export | done 2026-11-09, verified with a simulated power loss |
 | M4 | focus timer (configurable durations, on-screen countdown, chimes) | passed on device 2026-11-10, see section 15 |
 | M5 | L6–L8 (speaker sweep, microphone recording, loopback) | passed on device 2026-11-12, see section 15 |
-| M6 | L9–L11 (BLE, Wi-Fi scan, storage read/write) | not started — only the upstream demos exercise the radios |
-| M7 | serial screenshot export and an optional data partition | not started |
+| M6 | Wi-Fi scan, setup, internet probe and file round trip (L9–L10) | passed on device 2026-11-12; BLE skipped by decision |
+| M7 | serial screenshot export and a data partition | data partition done with M6; screenshot export not started |
 
 ## 13. Risks and open questions
 
@@ -334,3 +334,33 @@ Conclusions:
 - The duplex criterion uses Goertzel to estimate the 1 kHz share of the recording, which is steadier than listening;
   79% against a 20% threshold leaves plenty of margin.
 - At 20 px the result string exceeded 212 px, so it now spans two lines and every level result label wraps.
+
+### Radio and storage (M6, 2026-11-12 hardware)
+
+| Item | Result |
+| --- | --- |
+| L9 Wi-Fi scan | several APs found with a sane strongest RSSI; the record survives a power cycle via NVS |
+| L10 Wi-Fi setup | open `PQ-Setup` hotspot plus a phone form; the station connects |
+| Internet probe | `http://connectivitycheck.gstatic.com/generate_204` returns `204` |
+| File round trip | written to `/store/wifi_test.txt` and read back byte for byte |
+| Data partition | new 4 MB SPIFFS `storage` at 0x400000; the app partition shrank to 4 MB |
+
+Three problems found on hardware and fixed:
+
+1. **The Wi-Fi stack cannot be re-initialised per visit**: the second visit failed in
+   `esp_netif_new` / `esp_wifi_init` and the page showed "connection failed". Initialise once per
+   process and only start/stop the AP and HTTP server per visit.
+2. **Pages must be opaque**: a transparent page container let the previous page's pixels show
+   through as overlapping text; `pq_ui_page_create()` now paints a background.
+3. **The page must notice the phone**: watching only HTTP submits left it saying "waiting" while
+   the phone sat on the hotspot. It now watches `WIFI_EVENT_AP_STACONNECTED/DISCONNECTED` and
+   refreshes every 500 ms.
+
+Other decisions and limits:
+
+- **BLE levels are skipped by decision**; of the two radios only Wi-Fi is exercised by the app;
+- leaving the setup page stops the station link (power), credentials stay in NVS and the page
+  shows "last connected to …";
+- the **captive portal is not implemented**, so the page must be opened manually at 192.168.4.1;
+- after the partition change the merged image still resets NVS (the report), but the `storage`
+  partition sits after the app, so **files survive a full reflash**.
