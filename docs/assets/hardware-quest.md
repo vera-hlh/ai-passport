@@ -231,7 +231,7 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | M2.5 | CJK font pipeline and Chinese UI | done 2026-11-09, glyphs and layout confirmed on device |
 | M3 | report page: RAM + NVS + serial export | done 2026-11-09, verified with a simulated power loss |
 | M4 | focus timer (configurable durations, on-screen countdown, chimes) | passed on device 2026-11-10, see section 15 |
-| M5 | L6–L8 (speaker sweep, microphone recording, loopback) | not started — nothing has exercised the microphone yet |
+| M5 | L6–L8 (speaker sweep, microphone recording, loopback) | passed on device 2026-11-12, see section 15 |
 | M6 | L9–L11 (BLE, Wi-Fi scan, storage read/write) | not started — only the upstream demos exercise the radios |
 | M7 | serial screenshot export and an optional data partition | not started |
 
@@ -318,3 +318,19 @@ Interaction conventions in the current build:
 - Power trade-off: the last minute keeps the screen on, costing tens of milliamps more than sleeping all
   the way through. Shrinking `COUNTDOWN_US` is enough to trade it back without touching the state machine.
 - Pressing OK on the report page exports it over the serial port, a second retention path next to NVS.
+
+### Audio levels (M5, 2026-11-12 hardware)
+
+| Level | Result |
+| --- | --- |
+| L6 speaker | 200 Hz→8 kHz sweep for 3 s with no crackle; five volume steps distinguishable |
+| L7 microphone | RMS above the threshold (300) while speaking, peak sane |
+| L8 loopback | sequential playback recognisable; simultaneous duplex shows **79%** of the 1 kHz energy (threshold 20%) |
+
+Conclusions:
+
+- **The microphone and full-duplex I2S are verified for the first time**; audio input had no user before this.
+- Two seconds of 16 kHz mono needs 64 KB of heap, which allocated fine — the practical ceiling without PSRAM.
+- The duplex criterion uses Goertzel to estimate the 1 kHz share of the recording, which is steadier than listening;
+  79% against a 20% threshold leaves plenty of margin.
+- At 20 px the result string exceeded 212 px, so it now spans two lines and every level result label wraps.

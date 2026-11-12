@@ -226,6 +226,8 @@ static lv_obj_t *level_page(const char *title, lv_obj_t **body)
     lv_obj_t *page = pq_ui_page_create(title);
     if (body) {
         *body = pq_ui_text(page, "", 14, 70, &pq_font_20, PQ_COLOR_INK);
+        lv_obj_set_width(*body, 212);
+        lv_label_set_long_mode(*body, LV_LABEL_LONG_WRAP);
     }
     lv_obj_t *hint = pq_ui_text(page, PQ_TXT_BACK_HINT, 0, 286, &pq_font_16,
                                 PQ_COLOR_MUTED);
@@ -842,8 +844,9 @@ static void l8_show(void)
         lv_label_set_text(s_l8_label, PQ_TXT_PRESS_OK_RUN);
         return;
     }
-    char text[64];
-    snprintf(text, sizeof text, "%s %d%%  %s %s", PQ_TXT_DUPLEX,
+    // 20 px 字号下这一行有 240 px 宽，会出框：拆成两行。
+    char text[96];
+    snprintf(text, sizeof text, "%s %d%%\n%s %s", PQ_TXT_DUPLEX,
              (int)(s_l8_ratio * 100.0f), PQ_TXT_RECOGNIZABLE,
              s_l8_ok ? PQ_TXT_PASS : PQ_TXT_FAIL);
     lv_label_set_text(s_l8_label, text);
