@@ -205,7 +205,23 @@ static void page_close(void)
     s_summary = NULL;
 }
 
-// 结束当前关卡：写结果、打日志、回关卡列表。
+// 只写结果、打日志、落盘，不切页面。用于“测完就自动记账”的关卡。
+static void record_result(int index, quest_status_t status, const char *fmt, ...)
+{
+    s_status[index] = status;
+    if (fmt) {
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(s_detail[index], DETAIL_MAX, fmt, args);
+        va_end(args);
+    }
+    ESP_LOGI(TAG, "%s: %s %s", LEVELS[index].title, status_text(status),
+             s_detail[index]);
+    report_log();
+    results_save();
+}
+
+// 结束当前关卡：记账、打日志、回关卡列表。
 static void finish(int index, quest_status_t status, const char *fmt, ...)
 {
     s_status[index] = status;
@@ -1045,6 +1061,12 @@ done:
     return ok;
 }
 
+static void l9_record(void)
+{
+    record_result(L9_INDEX, s_l9_ok ? QS_PASS : QS_FAIL, "%u %s %d dBm",
+                  (unsigned)s_l9_count, PQ_TXT_AP_COUNT, (int)s_l9_rssi);
+}
+
 static void l9_show(void)
 {
     if (!s_l9_label) return;
@@ -1088,17 +1110,21 @@ static void l9_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 s_l9_ok = s_l9_count > 0;
                 s_l9_done = true;
                 wifi_record_save();
+                l9_record();   // 测完立即记账，长按返回也不会丢
                 ESP_LOGI(TAG, "L9 扫描: %u 个 AP, 最强 %d dBm (%s)",
                          (unsigned)s_l9_count, (int)s_l9_rssi, s_l9_ssid);
             } else {
-                finish(L9_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                record_result(L9_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                lv_label_set_text(s_l9_label, PQ_TXT_UNMEASURED_ERR);
                 return;
             }
             l9_show();
             return;
         }
-        finish(L9_INDEX, s_l9_ok ? QS_PASS : QS_FAIL, "%u %s %d dBm",
-               (unsigned)s_l9_count, PQ_TXT_AP_COUNT, (int)s_l9_rssi);
+        // 已经测过：再按确定 = 重新扫描（结果仍然是自动记账）。
+        s_l9_done = false;
+        lv_label_set_text(s_l9_label, PQ_TXT_PRESS_OK_RUN);
+        l9_show();
         return;
     }
 }
