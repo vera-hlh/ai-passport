@@ -767,10 +767,13 @@ static void l6_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             audio_sweep(3000);
             bsp_lvgl_lock(300);
             s_l6_done = true;
+            record_result(L6_INDEX, QS_PASS, "%s %d%%", PQ_TXT_MANUAL, s_l6_vol);
             l6_show();
             return;
         }
-        finish(L6_INDEX, QS_PASS, "%s %d%%", PQ_TXT_MANUAL, s_l6_vol);
+        // 已测过：再按确定 = 重跑扫频（结果仍自动记账）
+        s_l6_done = false;
+        l6_show();
         return;
     }
     if (!s_l6_done) return;
@@ -782,6 +785,7 @@ static void l6_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         bsp_lvgl_unlock();
         audio_tone(500, 1000);
         bsp_lvgl_lock(300);
+        record_result(L6_INDEX, QS_PASS, "%s %d%%", PQ_TXT_MANUAL, s_l6_vol);
         l6_show();
     }
 }
@@ -829,7 +833,8 @@ static void l7_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             const bool ok = audio_record(s_audio_buf, AUDIO_SAMPLE_RATE);   // 1 秒
             bsp_lvgl_lock(300);
             if (!ok) {
-                finish(L7_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                record_result(L7_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                l7_show();
                 return;
             }
             int peak = 0;
@@ -840,11 +845,14 @@ static void l7_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             s_l7_rms = audio_rms(s_audio_buf, AUDIO_SAMPLE_RATE);
             s_l7_peak = peak;
             s_l7_done = true;
+            record_result(L7_INDEX,
+                          s_l7_rms >= MIC_RMS_THRESHOLD ? QS_PASS : QS_FAIL,
+                          "%s %d", PQ_TXT_ENERGY, s_l7_rms);
             l7_show();
             return;
         }
-        finish(L7_INDEX, s_l7_rms >= MIC_RMS_THRESHOLD ? QS_PASS : QS_FAIL,
-               "%s %d", PQ_TXT_ENERGY, s_l7_rms);
+        s_l7_done = false;
+        l7_show();
         return;
     }
 }
@@ -931,11 +939,13 @@ static void l8_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         bsp_lvgl_unlock();
         l8_run();
         bsp_lvgl_lock(300);
+        record_result(L8_INDEX, s_l8_ok ? QS_PASS : QS_FAIL, "%s %d%%",
+                      PQ_TXT_DUPLEX, (int)(s_l8_ratio * 100.0f));
         l8_show();
         return;
     }
-    finish(L8_INDEX, s_l8_ok ? QS_PASS : QS_FAIL, "%s %d%%", PQ_TXT_DUPLEX,
-           (int)(s_l8_ratio * 100.0f));
+    s_l8_done = false;
+    l8_show();
 }
 
 
