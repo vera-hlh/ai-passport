@@ -16,6 +16,7 @@
 #include "pq_ui.h"
 #include "power.h"
 #include "ui_strings.h"
+#include "wifi_setup.h"
 
 #include "esp_attr.h"
 #include "esp_system.h"
@@ -35,13 +36,14 @@
 
 static const char *TAG = "pq_quest";
 
-#define LEVEL_COUNT 10
+#define LEVEL_COUNT 11
 #define L12_INDEX (LEVEL_COUNT - 1)
 #define L5_INDEX 4
 #define L6_INDEX 5
 #define L7_INDEX 6
 #define L8_INDEX 7
 #define L9_INDEX 8
+#define WIFI_SETUP_INDEX 9
 #define LIST_VISIBLE 6
 #define ROW_Y0 96
 #define ROW_STEP 32
@@ -69,6 +71,7 @@ static void l6_enter(void); static void l6_key(bsp_btn_t, bsp_btn_ev_t);
 static void l7_enter(void); static void l7_key(bsp_btn_t, bsp_btn_ev_t);
 static void l8_enter(void); static void l8_key(bsp_btn_t, bsp_btn_ev_t);
 static void l9_enter(void); static void l9_key(bsp_btn_t, bsp_btn_ev_t);
+static void l10_enter(void); static void l10_key(bsp_btn_t, bsp_btn_ev_t);
 static void l12_enter(void); static void l12_key(bsp_btn_t, bsp_btn_ev_t);
 
 static const quest_level_t LEVELS[LEVEL_COUNT] = {
@@ -81,6 +84,7 @@ static const quest_level_t LEVELS[LEVEL_COUNT] = {
     { PQ_TXT_LEVEL_MIC, l7_enter, l7_key },
     { PQ_TXT_LEVEL_LOOPBACK, l8_enter, l8_key },
     { PQ_TXT_LEVEL_WIFI, l9_enter, l9_key },
+    { PQ_TXT_WIFI_SETUP, l10_enter, l10_key },
     { PQ_TXT_DEEP_SLEEP, l12_enter, l12_key },
 };
 
@@ -347,6 +351,12 @@ void quest_close(void)
 {
     s_active = false;
     page_close();
+}
+
+void quest_suspend(void)
+{
+    s_active = false;
+    s_current = -1;
 }
 
 // ------------------------------------------------------------------ L1 屏幕
@@ -1139,6 +1149,27 @@ static void l9_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
 }
 
+
+// ------------------------------------------------------------------ L10 Wi-Fi 配网
+
+static void l10_enter(void)
+{
+    // 配网页自己管理页面与按键；把自检页挂起，避免两套路由互相抢事件。
+    page_close();
+    quest_suspend();
+    wifi_setup_open();
+}
+
+static void l10_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    wifi_setup_handle_key(btn, ev);
+}
+
+void quest_record_wifi_result(bool ok, const char *detail)
+{
+    record_result(WIFI_SETUP_INDEX, ok ? QS_PASS : QS_FAIL, "%s", detail ? detail : "");
+}
+
 // ------------------------------------------------------------------ L12 深睡
 
 static const uint32_t L12_DURATIONS_S[3] = { 10, 15, 30 };
@@ -1293,7 +1324,8 @@ void quest_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     if (s_current >= 0) {
         // 关卡内：长按确定统一返回列表（L5 自己接管长按语义）。
-        if (s_current != L5_INDEX && ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        if (s_current != L5_INDEX && s_current != WIFI_SETUP_INDEX &&
+            ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
             if (!bsp_lvgl_lock(300)) return;
             leave_level();
             bsp_lvgl_unlock();

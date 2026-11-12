@@ -14,6 +14,12 @@ void quest_open_last_sleep(void);
 // 离开自检页并释放页面（不切到主屏）。
 void quest_close(void);
 
+// 挂起自检页（不删页面、不切主屏），用于把控制权交给子页面。
+void quest_suspend(void);
+
+// 配网页连接成功后写一条结果（由 wifi_setup 调用）。
+void quest_record_wifi_result(bool ok, const char *detail);
+
 // 自检页是否处于活动状态（按键路由用）。
 bool quest_is_active(void);
 
