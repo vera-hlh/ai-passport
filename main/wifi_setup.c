@@ -23,6 +23,8 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 #include "esp_spiffs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -170,6 +172,15 @@ static void html_escape(char *out, size_t len, const char *in)
     out[used] = 0;
 }
 
+
+static esp_err_t portal_redirect(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 static esp_err_t root_get(httpd_req_t *req)
 {
     static char page[4096];
@@ -267,7 +278,7 @@ static esp_err_t connect_post(httpd_req_t *req)
 static void http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 4;
+    cfg.max_uri_handlers = 12;
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HTTP 服务启动失败");
         s_server = NULL;
@@ -277,12 +288,30 @@ static void http_start(void)
     httpd_uri_t connect = { .uri = "/connect", .method = HTTP_POST, .handler = connect_post };
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &connect);
+
+    // 各平台的联网探测请求：回了 302，系统就会弹“登录网络”页面。
+    static const char *const PROBES[] = {
+        "/generate_204",          // Android
+        "/gen_204",               // Android 旧版
+        "/hotspot-detect.html",   // iOS / macOS
+        "/library/test/success.html",
+        "/connecttest.txt",       // Windows
+        "/ncsi.txt",
+        "/redirect",
+    };
+    for (size_t i = 0; i < sizeof PROBES / sizeof PROBES[0]; i++) {
+        httpd_uri_t probe = { .uri = PROBES[i], .method = HTTP_GET,
+                              .handler = portal_redirect };
+        httpd_register_uri_handler(s_server, &probe);
+    }
 }
 
 // ------------------------------------------------------------------ Wi-Fi 栈
 
 static void sta_event(void *arg, esp_event_base_t base, int32_t id, void *data);
 static bool sta_wait_ip(void);
+static void portal_dns_hijack(void);
+static void portal_dns_stop(void);
 
 // Wi-Fi 栈只在进程内初始化一次：反复 init/deinit 在第二次进入时会失败
 // （netif 与事件注册残留），表现为“明明连上过，再进来就显示连接失败”。
@@ -343,6 +372,7 @@ static bool wifi_session_start(void)
     if (esp_wifi_scan_start(NULL, true) == ESP_OK) {
         if (esp_wifi_scan_get_ap_records(&count, s_aps) == ESP_OK) s_ap_count = count;
     }
+    portal_dns_hijack();
     ESP_LOGI(TAG, "SoftAP %s 已启动，扫描到 %u 个 AP", AP_SSID, (unsigned)s_ap_count);
     return true;
 }
@@ -350,6 +380,7 @@ static bool wifi_session_start(void)
 // 离开页面：只停 HTTP 与射频，保留初始化好的栈给下次复用。
 static void wifi_session_stop(void)
 {
+    portal_dns_stop();
     if (s_server) {
         httpd_stop(s_server);
         s_server = NULL;
@@ -507,6 +538,122 @@ static void tick_cb(lv_timer_t *timer)
 {
     (void)timer;
     refresh();
+}
+
+
+// ------------------------------------------------------------------ 强制门户
+
+static TaskHandle_t s_dns_task;
+static volatile bool s_dns_run;
+static uint32_t s_ap_ip;          // 192.168.4.1（以实际 netif 为准）
+
+// 极简 DNS：任何 A 查询都回同一个地址，让手机把所有域名解析到设备自己。
+static void dns_task(void *arg)
+{
+    (void)arg;
+    const int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "DNS socket 创建失败");
+        s_dns_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
+        ESP_LOGE(TAG, "DNS bind 53 失败");
+        close(sock);
+        s_dns_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uint8_t buf[256];
+    while (s_dns_run) {
+        struct sockaddr_in from;
+        socklen_t from_len = sizeof from;
+        const int len = recvfrom(sock, buf, sizeof buf, 0,
+                                 (struct sockaddr *)&from, &from_len);
+        if (len < 12) continue;
+
+        // 只处理标准查询（QR=0）
+        if (buf[2] & 0x80) continue;
+
+        // 找到问题段结尾：跳过 QNAME + QTYPE + QCLASS
+        int qname_end = 12;
+        while (qname_end < len && buf[qname_end] != 0) {
+            qname_end += buf[qname_end] + 1;
+        }
+        if (qname_end + 5 > len) continue;
+        const int question_len = (qname_end + 1 + 4) - 12;
+
+        uint8_t reply[256];
+        int out = 0;
+        memcpy(reply, buf, 12);
+        reply[2] = 0x81;   // QR=1, opcode 0, AA=1
+        reply[3] = 0x80;   // RA=1, rcode=0
+        reply[6] = 0x00;   // ANCOUNT = 1
+        reply[7] = 0x01;
+        reply[8] = 0x00;   // NSCOUNT = 0
+        reply[9] = 0x00;
+        reply[10] = 0x00;  // ARCOUNT = 0
+        reply[11] = 0x00;
+        out = 12;
+        memcpy(reply + out, buf + 12, (size_t)question_len);
+        out += question_len;
+
+        // 回答：名字指针 + A + IN + TTL 60s + 4 字节地址
+        reply[out++] = 0xC0;
+        reply[out++] = 0x0C;
+        reply[out++] = 0x00;
+        reply[out++] = 0x01;
+        reply[out++] = 0x00;
+        reply[out++] = 0x01;
+        reply[out++] = 0x00;
+        reply[out++] = 0x00;
+        reply[out++] = 0x00;
+        reply[out++] = 60;
+        reply[out++] = 0x00;
+        reply[out++] = 0x04;
+        memcpy(reply + out, &s_ap_ip, 4);
+        out += 4;
+
+        sendto(sock, reply, (size_t)out, 0, (struct sockaddr *)&from, from_len);
+    }
+
+    close(sock);
+    s_dns_task = NULL;
+    vTaskDelete(NULL);
+}
+
+// 把 DHCP 下发的 DNS 指向设备自己：手机一解析就连到配网页。
+static void portal_dns_hijack(void)
+{
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(s_ap_netif, &ip) != ESP_OK) return;
+    s_ap_ip = ip.ip.addr;
+
+    esp_netif_dns_info_t dns = { 0 };
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    dns.ip.u_addr.ip4.addr = ip.ip.addr;
+    esp_netif_dhcps_stop(s_ap_netif);
+    esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, &dns);
+    esp_netif_dhcps_start(s_ap_netif);
+
+    if (!s_dns_run) {
+        s_dns_run = true;
+        xTaskCreate(dns_task, "dns_hijack", 3072, NULL, 3, &s_dns_task);
+    }
+    ESP_LOGI(TAG, "强制门户 DNS 已指向设备 (%08x)", (unsigned)s_ap_ip);
+}
+
+static void portal_dns_stop(void)
+{
+    s_dns_run = false;
 }
 
 // ------------------------------------------------------------------ 连接任务
