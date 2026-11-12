@@ -45,7 +45,7 @@ static const char *TAG = "pq_quest";
 #define L9_INDEX 8
 #define WIFI_SETUP_INDEX 9
 #define LIST_VISIBLE 6
-#define ROW_Y0 96
+#define ROW_Y0 88
 #define ROW_STEP 32
 #define ROW_H 32
 #define DETAIL_MAX 32
@@ -313,10 +313,10 @@ void quest_open(void)
         s_row_states[i] = state;
     }
 
-    s_summary = pq_ui_text(s_page, "", 14, 66, &pq_font_16, PQ_COLOR_ACCENT);
+    s_summary = pq_ui_text(s_page, "", 14, 56, &pq_font_16, PQ_COLOR_ACCENT);
     list_refresh();
 
-    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_HOME_HINT, 0, 292, &pq_font_16,
+    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_HOME_HINT, 0, 290, &pq_font_16,
                                 PQ_COLOR_MUTED);
     lv_obj_set_width(hint, LV_PCT(100));
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);

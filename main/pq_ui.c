@@ -14,7 +14,11 @@ lv_obj_t *pq_ui_page_create(const char *title)
     lv_obj_t *page = lv_obj_create(screen);
     lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    // 页面必须自带底色：透明页面在切页时会让上一页的残留像素透出来，
+    // 表现为“标题上叠着另一页的文字”。不透明底是最省事的根治办法。
+    lv_obj_set_style_bg_color(page, lv_color_hex(PQ_COLOR_BG), 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(page, 0, 0);
     lv_obj_set_style_border_width(page, 0, 0);
     lv_obj_set_style_pad_all(page, 0, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);

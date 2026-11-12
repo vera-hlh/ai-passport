@@ -79,6 +79,7 @@ static volatile bool s_connect_requested;
 static wifi_ap_record_t s_aps[MAX_APS];
 static uint16_t s_ap_count;
 static TaskHandle_t s_task;
+static volatile int s_disconnect_reason;
 
 // ------------------------------------------------------------------ 页面
 
@@ -262,6 +263,9 @@ static void http_start(void)
 
 // ------------------------------------------------------------------ Wi-Fi 栈
 
+static void sta_event(void *arg, esp_event_base_t base, int32_t id, void *data);
+static bool sta_wait_ip(void);
+
 static bool wifi_stack_up(void)
 {
     if (demo_radio_nvs_prepare() != ESP_OK) return false;
@@ -296,6 +300,9 @@ static bool wifi_stack_up(void)
 
     if (esp_wifi_start() != ESP_OK) return false;
     s_wifi_started = true;
+    esp_event_handler_instance_t inst;
+    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                                        sta_event, NULL, &inst);
 
     // 扫描（APSTA 下可以边开热点边扫）
     uint16_t count = MAX_APS;
@@ -330,7 +337,9 @@ static void wifi_stack_down(void)
     }
 }
 
-// 连接 STA 并等 IP。返回是否拿到地址。
+static bool sta_wait_ip(void);
+
+// 连接 STA 并等 IP。失败会重试一次，并把断开原因打出来。
 static bool sta_connect(void)
 {
     wifi_config_t sta = { 0 };
@@ -342,6 +351,22 @@ static bool sta_connect(void)
     if (esp_wifi_set_config(WIFI_IF_STA, &sta) != ESP_OK) return false;
     if (esp_wifi_connect() != ESP_OK) return false;
 
+    for (int attempt = 0; attempt < 2; attempt++) {
+        s_disconnect_reason = 0;
+        if (attempt > 0) {
+            ESP_LOGW(TAG, "重试连接 %s（上次 reason=%d）", s_cred.ssid, s_disconnect_reason);
+            esp_wifi_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_wifi_connect();
+        }
+        if (sta_wait_ip()) return true;
+    }
+    esp_wifi_disconnect();
+    return false;
+}
+
+static bool sta_wait_ip(void)
+{
     for (int waited = 0; waited < CONNECT_TIMEOUT_MS; waited += 200) {
         vTaskDelay(pdMS_TO_TICKS(200));
         esp_netif_ip_info_t ip;
@@ -350,7 +375,6 @@ static bool sta_connect(void)
             return true;
         }
     }
-    esp_wifi_disconnect();
     return false;
 }
 
@@ -434,6 +458,18 @@ static bool file_roundtrip(const char *ip, int http_status)
     const bool ok = got == written && strcmp(readback, content) == 0;
     ESP_LOGI(TAG, "文件回读: %s (%u 字节)", ok ? "一致" : "不一致", (unsigned)got);
     return ok;
+}
+
+static void sta_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    (void)base;
+    if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *event =
+            (const wifi_event_sta_disconnected_t *)data;
+        s_disconnect_reason = event ? event->reason : -1;
+        ESP_LOGW(TAG, "STA 断开, reason=%d", s_disconnect_reason);
+    }
 }
 
 // ------------------------------------------------------------------ 连接任务
