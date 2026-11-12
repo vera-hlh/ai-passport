@@ -114,6 +114,11 @@
 #define PQ_TXT_DUPLEX        "同时收发"
 #define PQ_TXT_RECOGNIZABLE  "可辨认"
 #define PQ_TXT_PRESS_OK_RUN  "确定 开始测试"
+#define PQ_TXT_LEVEL_WIFI    "Wi-Fi 扫描"
+#define PQ_TXT_SCANNING      "扫描中"
+#define PQ_TXT_LAST_RECORD   "上次记录"
+#define PQ_TXT_AP_COUNT      "个 AP"
+#define PQ_TXT_STRONGEST     "最强"
 
 static const char *const PQ_UI_STRINGS[] = {
     PQ_TXT_HOME_TITLE, PQ_TXT_BATTERY, PQ_TXT_WAKE_COUNT, PQ_TXT_LAST_SLEEP,

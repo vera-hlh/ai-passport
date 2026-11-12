@@ -35,12 +35,13 @@
 
 static const char *TAG = "pq_quest";
 
-#define LEVEL_COUNT 9
+#define LEVEL_COUNT 10
 #define L12_INDEX (LEVEL_COUNT - 1)
 #define L5_INDEX 4
 #define L6_INDEX 5
 #define L7_INDEX 6
 #define L8_INDEX 7
+#define L9_INDEX 8
 #define LIST_VISIBLE 6
 #define ROW_Y0 96
 #define ROW_STEP 32
@@ -67,6 +68,7 @@ static void l5_enter(void); static void l5_key(bsp_btn_t, bsp_btn_ev_t);
 static void l6_enter(void); static void l6_key(bsp_btn_t, bsp_btn_ev_t);
 static void l7_enter(void); static void l7_key(bsp_btn_t, bsp_btn_ev_t);
 static void l8_enter(void); static void l8_key(bsp_btn_t, bsp_btn_ev_t);
+static void l9_enter(void); static void l9_key(bsp_btn_t, bsp_btn_ev_t);
 static void l12_enter(void); static void l12_key(bsp_btn_t, bsp_btn_ev_t);
 
 static const quest_level_t LEVELS[LEVEL_COUNT] = {
@@ -78,6 +80,7 @@ static const quest_level_t LEVELS[LEVEL_COUNT] = {
     { PQ_TXT_LEVEL_SPEAKER, l6_enter, l6_key },
     { PQ_TXT_LEVEL_MIC, l7_enter, l7_key },
     { PQ_TXT_LEVEL_LOOPBACK, l8_enter, l8_key },
+    { PQ_TXT_LEVEL_WIFI, l9_enter, l9_key },
     { PQ_TXT_DEEP_SLEEP, l12_enter, l12_key },
 };
 
@@ -917,6 +920,187 @@ static void l8_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
     finish(L8_INDEX, s_l8_ok ? QS_PASS : QS_FAIL, "%s %d%%", PQ_TXT_DUPLEX,
            (int)(s_l8_ratio * 100.0f));
+}
+
+
+// ------------------------------------------------------------------ L9 Wi-Fi 扫描
+
+#include "demo_radio.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "nvs.h"
+
+#define WIFI_NVS_NAMESPACE "pq_wifi"
+#define WIFI_NVS_KEY "last"
+#define WIFI_RECORD_MAGIC 0x57494631u   // 'WIF1'
+
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;          // 第几次扫描，用来确认记录确实被刷新
+    uint16_t count;
+    int16_t rssi;
+    char ssid[33];
+} wifi_record_t;
+
+static lv_obj_t *s_l9_label;
+static bool s_l9_done;
+static bool s_l9_ok;
+static uint16_t s_l9_count;
+static int16_t s_l9_rssi;
+static char s_l9_ssid[33];
+static wifi_record_t s_l9_last;
+
+static void wifi_record_load(void)
+{
+    memset(&s_l9_last, 0, sizeof s_l9_last);
+    nvs_handle_t handle;
+    if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return;
+    wifi_record_t blob;
+    size_t len = sizeof blob;
+    const bool ok = nvs_get_blob(handle, WIFI_NVS_KEY, &blob, &len) == ESP_OK &&
+                    len == sizeof blob && blob.magic == WIFI_RECORD_MAGIC;
+    nvs_close(handle);
+    if (ok) s_l9_last = blob;
+}
+
+static void wifi_record_save(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+    wifi_record_t blob = {
+        .magic = WIFI_RECORD_MAGIC,
+        .seq = s_l9_last.seq + 1,
+        .count = s_l9_count,
+        .rssi = s_l9_rssi,
+    };
+    memcpy(blob.ssid, s_l9_ssid, sizeof blob.ssid);
+    esp_err_t e = nvs_set_blob(handle, WIFI_NVS_KEY, &blob, sizeof blob);
+    if (e == ESP_OK) e = nvs_commit(handle);
+    if (e != ESP_OK) ESP_LOGW(TAG, "Wi-Fi 记录写入 NVS 失败: %s", esp_err_to_name(e));
+    nvs_close(handle);
+    s_l9_last = blob;
+}
+
+// 一次阻塞扫描：初始化 STA、扫描、取结果，然后完整拆除射频（省电、也避免别的关卡受影响）。
+static bool wifi_scan_once(uint16_t *total_out, int16_t *rssi_out, char *ssid_out, size_t ssid_len)
+{
+    esp_netif_t *sta = NULL;
+    bool wifi_inited = false;
+    bool wifi_started = false;
+    bool ok = false;
+
+    if (demo_radio_nvs_prepare() != ESP_OK) return false;
+    if (demo_radio_network_prepare() != ESP_OK) return false;
+
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_WIFI_STA();
+    sta = esp_netif_new(&netif_cfg);
+    if (!sta) goto done;
+    if (esp_netif_attach_wifi_station(sta) != ESP_OK) goto done;
+    if (esp_wifi_set_default_wifi_sta_handlers() != ESP_OK) goto done;
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    if (esp_wifi_init(&cfg) != ESP_OK) goto done;
+    wifi_inited = true;
+    if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) goto done;
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) goto done;
+    if (esp_wifi_start() != ESP_OK) goto done;
+    wifi_started = true;
+
+    if (esp_wifi_scan_start(NULL, true) != ESP_OK) goto done;   // true = 阻塞到扫描完成
+
+    uint16_t total = 0;
+    if (esp_wifi_scan_get_ap_num(&total) != ESP_OK) goto done;
+
+    wifi_ap_record_t best;
+    memset(&best, 0, sizeof best);
+    bool have_best = false;
+    uint16_t want = 16;
+    wifi_ap_record_t records[16];
+    if (total > 0 && esp_wifi_scan_get_ap_records(&want, records) == ESP_OK) {
+        for (uint16_t i = 0; i < want; i++) {
+            if (!have_best || records[i].rssi > best.rssi) {
+                best = records[i];
+                have_best = true;
+            }
+        }
+    }
+
+    *total_out = total;
+    *rssi_out = have_best ? best.rssi : 0;
+    if (have_best) {
+        snprintf(ssid_out, ssid_len, "%s", (const char *)best.ssid);
+    } else {
+        snprintf(ssid_out, ssid_len, "-");
+    }
+    ok = true;
+
+done:
+    if (wifi_started) {
+        esp_wifi_scan_stop();
+        esp_wifi_stop();
+    }
+    if (wifi_inited) esp_wifi_deinit();
+    if (sta) esp_netif_destroy_default_wifi(sta);
+    return ok;
+}
+
+static void l9_show(void)
+{
+    if (!s_l9_label) return;
+    char text[96];
+    if (!s_l9_done) {
+        if (s_l9_last.magic == WIFI_RECORD_MAGIC) {
+            snprintf(text, sizeof text, "%s %u %s  %d dBm",
+                     PQ_TXT_LAST_RECORD, (unsigned)s_l9_last.count, PQ_TXT_AP_COUNT,
+                     (int)s_l9_last.rssi);
+        } else {
+            snprintf(text, sizeof text, "%s", PQ_TXT_PRESS_OK_RUN);
+        }
+    } else {
+        snprintf(text, sizeof text, "%u %s\n%s %d dBm\n%s", (unsigned)s_l9_count,
+                 PQ_TXT_AP_COUNT, PQ_TXT_STRONGEST, (int)s_l9_rssi,
+                 s_l9_ok ? PQ_TXT_PASS : PQ_TXT_FAIL);
+    }
+    lv_label_set_text(s_l9_label, text);
+}
+
+static void l9_enter(void)
+{
+    s_l9_done = false;
+    s_l9_ok = false;
+    wifi_record_load();
+    s_page = level_page(PQ_TXT_LEVEL_WIFI, &s_l9_label);
+    l9_show();
+}
+
+static void l9_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_OK) {
+        if (!s_l9_done) {
+            lv_label_set_text(s_l9_label, PQ_TXT_SCANNING);
+            bsp_lvgl_unlock();
+            const bool ok = wifi_scan_once(&s_l9_count, &s_l9_rssi, s_l9_ssid,
+                                           sizeof s_l9_ssid);
+            bsp_lvgl_lock(300);
+            if (ok) {
+                s_l9_ok = s_l9_count > 0;
+                s_l9_done = true;
+                wifi_record_save();
+                ESP_LOGI(TAG, "L9 扫描: %u 个 AP, 最强 %d dBm (%s)",
+                         (unsigned)s_l9_count, (int)s_l9_rssi, s_l9_ssid);
+            } else {
+                finish(L9_INDEX, QS_FAIL, "%s", PQ_TXT_UNMEASURED_ERR);
+                return;
+            }
+            l9_show();
+            return;
+        }
+        finish(L9_INDEX, s_l9_ok ? QS_PASS : QS_FAIL, "%u %s %d dBm",
+               (unsigned)s_l9_count, PQ_TXT_AP_COUNT, (int)s_l9_rssi);
+        return;
+    }
 }
 
 // ------------------------------------------------------------------ L12 深睡
