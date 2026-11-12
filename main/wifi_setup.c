@@ -70,8 +70,8 @@ static bool s_active;
 static esp_netif_t *s_ap_netif;
 static esp_netif_t *s_sta_netif;
 static httpd_handle_t s_server;
-static bool s_wifi_inited;
 static bool s_wifi_started;
+static bool s_stack_ready;
 static volatile setup_state_t s_state;
 static char s_ip[16];
 static cred_t s_cred;
@@ -90,6 +90,7 @@ static void refresh(void)
         case SETUP_CONNECTING:
             lv_label_set_text(s_status, PQ_TXT_CONNECTING);
             lv_obj_set_style_text_color(s_status, lv_color_hex(PQ_COLOR_ACCENT), 0);
+            if (s_detail) lv_label_set_text(s_detail, "");
             break;
         case SETUP_CONNECTED:
             lv_label_set_text(s_status, PQ_TXT_CONNECTED);
@@ -99,6 +100,9 @@ static void refresh(void)
         case SETUP_FAILED:
             lv_label_set_text(s_status, PQ_TXT_CONNECT_FAILED);
             lv_obj_set_style_text_color(s_status, lv_color_hex(PQ_COLOR_WARN), 0);
+            if (s_detail) {
+                lv_label_set_text_fmt(s_detail, "%s\n%s", PQ_TXT_RETRY, PQ_TXT_BACK_HINT);
+            }
             break;
         default:
             lv_label_set_text(s_status, PQ_TXT_WAIT_PHONE);
@@ -266,12 +270,14 @@ static void http_start(void)
 static void sta_event(void *arg, esp_event_base_t base, int32_t id, void *data);
 static bool sta_wait_ip(void);
 
-static bool wifi_stack_up(void)
+// Wi-Fi 栈只在进程内初始化一次：反复 init/deinit 在第二次进入时会失败
+// （netif 与事件注册残留），表现为“明明连上过，再进来就显示连接失败”。
+static bool wifi_stack_prepare(void)
 {
+    if (s_stack_ready) return true;
     if (demo_radio_nvs_prepare() != ESP_OK) return false;
     if (demo_radio_network_prepare() != ESP_OK) return false;
 
-    // 先扫描一次，给配网页做 SSID 下拉列表。
     esp_netif_config_t sta_cfg = ESP_NETIF_DEFAULT_WIFI_STA();
     s_sta_netif = esp_netif_new(&sta_cfg);
     if (!s_sta_netif) return false;
@@ -280,14 +286,26 @@ static bool wifi_stack_up(void)
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&init_cfg) != ESP_OK) return false;
-    s_wifi_inited = true;
 
     esp_netif_config_t ap_cfg = ESP_NETIF_DEFAULT_WIFI_AP();
     s_ap_netif = esp_netif_new(&ap_cfg);
     if (!s_ap_netif) return false;
     if (esp_netif_attach_wifi_ap(s_ap_netif) != ESP_OK) return false;
 
+    esp_event_handler_instance_t inst;
+    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                                        sta_event, NULL, &inst);
+
     if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) return false;
+    s_stack_ready = true;
+    return true;
+}
+
+// 每次进入配网页：开 AP、扫一次、起 HTTP。
+static bool wifi_session_start(void)
+{
+    if (!wifi_stack_prepare()) return false;
+
     if (esp_wifi_set_mode(WIFI_MODE_APSTA) != ESP_OK) return false;
 
     wifi_config_t ap = { 0 };
@@ -298,13 +316,11 @@ static bool wifi_stack_up(void)
     ap.ap.authmode = WIFI_AUTH_OPEN;
     if (esp_wifi_set_config(WIFI_IF_AP, &ap) != ESP_OK) return false;
 
-    if (esp_wifi_start() != ESP_OK) return false;
-    s_wifi_started = true;
-    esp_event_handler_instance_t inst;
-    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                                        sta_event, NULL, &inst);
+    if (!s_wifi_started) {
+        if (esp_wifi_start() != ESP_OK) return false;
+        s_wifi_started = true;
+    }
 
-    // 扫描（APSTA 下可以边开热点边扫）
     uint16_t count = MAX_APS;
     if (esp_wifi_scan_start(NULL, true) == ESP_OK) {
         if (esp_wifi_scan_get_ap_records(&count, s_aps) == ESP_OK) s_ap_count = count;
@@ -313,7 +329,8 @@ static bool wifi_stack_up(void)
     return true;
 }
 
-static void wifi_stack_down(void)
+// 离开页面：只停 HTTP 与射频，保留初始化好的栈给下次复用。
+static void wifi_session_stop(void)
 {
     if (s_server) {
         httpd_stop(s_server);
@@ -323,21 +340,7 @@ static void wifi_stack_down(void)
         esp_wifi_stop();
         s_wifi_started = false;
     }
-    if (s_wifi_inited) {
-        esp_wifi_deinit();
-        s_wifi_inited = false;
-    }
-    if (s_sta_netif) {
-        esp_netif_destroy_default_wifi(s_sta_netif);
-        s_sta_netif = NULL;
-    }
-    if (s_ap_netif) {
-        esp_netif_destroy_default_wifi(s_ap_netif);
-        s_ap_netif = NULL;
-    }
 }
-
-static bool sta_wait_ip(void);
 
 // 连接 STA 并等 IP。失败会重试一次，并把断开原因打出来。
 static bool sta_connect(void)
@@ -551,7 +554,7 @@ void wifi_setup_open(void)
 
     refresh();
 
-    if (!wifi_stack_up()) {
+    if (!wifi_session_start()) {
         s_state = SETUP_FAILED;
         refresh();
         return;
@@ -572,7 +575,7 @@ static void close_to_home(void)
     s_active = false;
     vTaskDelay(pdMS_TO_TICKS(250));   // 让连接任务看到 s_active 并自己退出
     spiffs_unmount();
-    wifi_stack_down();
+    wifi_session_stop();
     pq_ui_page_delete(&s_page);
     s_status = s_detail = s_hint = NULL;
     app_home_open();
