@@ -18,10 +18,12 @@
 #include "ui_strings.h"
 
 #include "esp_event.h"
+#include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_spiffs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -31,6 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <stdio.h>
 
 static const char *TAG = "pq_wifisetup";
 
@@ -350,6 +354,88 @@ static bool sta_connect(void)
     return false;
 }
 
+
+// ------------------------------------------------------------------ 联网与文件读写
+
+#define STORE_PATH "/store"
+#define STORE_FILE STORE_PATH "/wifi_test.txt"
+
+static bool s_spiffs_mounted;
+
+static bool spiffs_mount(void)
+{
+    if (s_spiffs_mounted) return true;
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = STORE_PATH,
+        .partition_label = "storage",
+        .max_files = 2,
+        .format_if_mount_failed = true,
+    };
+    if (esp_vfs_spiffs_register(&conf) != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS 挂载失败");
+        return false;
+    }
+    s_spiffs_mounted = true;
+    return true;
+}
+
+static void spiffs_unmount(void)
+{
+    if (!s_spiffs_mounted) return;
+    esp_vfs_spiffs_unregister("storage");
+    s_spiffs_mounted = false;
+}
+
+// 一次真实 HTTP 请求：取 204 空响应，验证 DNS、路由与出站 TCP 都通。
+static int http_probe(void)
+{
+    esp_http_client_config_t cfg = {
+        .url = "http://connectivitycheck.gstatic.com/generate_204",
+        .timeout_ms = 8000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return -1;
+    const esp_err_t err = esp_http_client_perform(client);
+    const int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
+    esp_http_client_cleanup(client);
+    ESP_LOGI(TAG, "HTTP 探测: err=%s status=%d", esp_err_to_name(err), status);
+    return status;
+}
+
+// 写一个文件再读回来比对，验证 SPIFFS 真的能落盘。
+static bool file_roundtrip(const char *ip, int http_status)
+{
+    if (!spiffs_mount()) return false;
+
+    char content[128];
+    snprintf(content, sizeof content, "ssid=%s ip=%s http=%d", s_cred.ssid, ip,
+             http_status);
+
+    FILE *f = fopen(STORE_FILE, "w");
+    if (!f) {
+        ESP_LOGE(TAG, "打开写入失败: %s", STORE_FILE);
+        return false;
+    }
+    const size_t written = fwrite(content, 1, strlen(content), f);
+    fclose(f);
+    if (written != strlen(content)) {
+        ESP_LOGE(TAG, "写入长度不符: %u/%u", (unsigned)written,
+                 (unsigned)strlen(content));
+        return false;
+    }
+
+    char readback[128] = { 0 };
+    f = fopen(STORE_FILE, "r");
+    if (!f) return false;
+    const size_t got = fread(readback, 1, sizeof readback - 1, f);
+    fclose(f);
+    readback[got] = 0;
+
+    const bool ok = got == written && strcmp(readback, content) == 0;
+    ESP_LOGI(TAG, "文件回读: %s (%u 字节)", ok ? "一致" : "不一致", (unsigned)got);
+    return ok;
+}
+
 // ------------------------------------------------------------------ 连接任务
 
 static void connect_task(void *arg)
@@ -367,8 +453,24 @@ static void connect_task(void *arg)
             const bool ok = sta_connect();
             if (ok) {
                 cred_save();
-                quest_record_wifi_result(true, s_ip);
-                ESP_LOGI(TAG, "已连接 %s, IP=%s", s_cred.ssid, s_ip);
+                const int http_status = http_probe();
+                const bool file_ok = file_roundtrip(s_ip, http_status);
+
+                char detail[40];
+                snprintf(detail, sizeof detail, "%s %d %s", s_ip, http_status,
+                         file_ok ? PQ_TXT_PASS : PQ_TXT_FAIL);
+                quest_record_wifi_result(http_status > 0 && file_ok, detail);
+                ESP_LOGI(TAG, "已连接 %s, IP=%s, HTTP=%d, 文件=%s", s_cred.ssid, s_ip,
+                         http_status, file_ok ? "一致" : "失败");
+
+                if (bsp_lvgl_lock(300)) {
+                    if (s_detail) {
+                        lv_label_set_text_fmt(s_detail, "IP %s\nHTTP %d\n%s %s",
+                                              s_ip, http_status, PQ_TXT_FILE_STORE,
+                                              file_ok ? PQ_TXT_PASS : PQ_TXT_FAIL);
+                    }
+                    bsp_lvgl_unlock();
+                }
             } else {
                 quest_record_wifi_result(false, PQ_TXT_CONNECT_FAILED);
                 ESP_LOGW(TAG, "连接 %s 失败（或超时）", s_cred.ssid);
@@ -433,6 +535,7 @@ static void close_to_home(void)
 {
     s_active = false;
     vTaskDelay(pdMS_TO_TICKS(250));   // 让连接任务看到 s_active 并自己退出
+    spiffs_unmount();
     wifi_stack_down();
     pq_ui_page_delete(&s_page);
     s_status = s_detail = s_hint = NULL;

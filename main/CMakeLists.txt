@@ -21,7 +21,7 @@ idf_component_register(
          "focus.c"
          "wifi_setup.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash esp_http_server
+    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash esp_http_server esp_http_client spiffs
 )
 
 # 生成的中文点阵字体（assets/fonts/，见 tools/gen_font.py）

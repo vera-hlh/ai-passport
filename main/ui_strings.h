@@ -122,6 +122,7 @@
 #define PQ_TXT_CONNECTING    "连接中"
 #define PQ_TXT_CONNECTED     "已连接"
 #define PQ_TXT_CONNECT_FAILED "连接失败"
+#define PQ_TXT_FILE_STORE  "文件"
 #define PQ_TXT_SCANNING      "扫描中"
 #define PQ_TXT_LAST_RECORD   "上次记录"
 #define PQ_TXT_AP_COUNT      "个 AP"
