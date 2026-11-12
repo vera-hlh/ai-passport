@@ -19,7 +19,7 @@
 
 static const char *TAG = "pq_report";
 
-#define ROW_Y0 104
+#define ROW_Y0 96
 #define ROW_STEP 30
 #define ROW_H 30
 #define MAX_ROWS 12
@@ -28,7 +28,7 @@ static const char *TAG = "pq_report";
 static lv_obj_t *s_page;
 static lv_obj_t *s_rows[MAX_ROWS];
 static lv_obj_t *s_detail;
-static lv_obj_t *s_warn;
+static lv_obj_t *s_bottom;
 static int s_count;
 static int s_selected;
 static int s_offset;
@@ -74,6 +74,18 @@ static void build(void)
     for (int i = 0; i < s_count; i++) {
         if (quest_results_status(i) == 1) passed++;
     }
+
+    // 版面自上而下：标题(自带) / 汇总 / 选中项详情 / 列表 / 底部提示。
+    // 详情只占一行并用省略号截断，避免换行后压到列表上。
+    char text[64];
+    snprintf(text, sizeof text, "%s %d/%d", PQ_TXT_QUEST_REPORT, passed, s_count);
+    pq_ui_text(s_page, text, 14, 44, &pq_font_16, PQ_COLOR_ACCENT);
+
+    s_detail = pq_ui_text(s_page, "", 14, 68, &pq_font_16, PQ_COLOR_INK);
+    lv_obj_set_width(s_detail, 212);
+    lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
+    detail_refresh();
+
     for (int i = s_offset; i < s_count && i < s_offset + VISIBLE_ROWS; i++) {
         lv_obj_t *row = pq_ui_row(s_page, 12, ROW_Y0 + (i - s_offset) * ROW_STEP,
                                   216, ROW_H, i == s_selected);
@@ -94,26 +106,10 @@ static void build(void)
         s_rows[i] = row;
     }
 
-    char text[64];
-    snprintf(text, sizeof text, "%s %d/%d", PQ_TXT_QUEST_REPORT, passed, s_count);
-    pq_ui_text(s_page, text, 14, 64, &pq_font_16, PQ_COLOR_ACCENT);
-
-    // 选中项的详情紧贴列表上方，避免用户以为“没有详情”。
-    s_detail = pq_ui_text(s_page, "", 14, 88, &pq_font_16, PQ_COLOR_INK);
-    lv_obj_set_width(s_detail, 212);
-    detail_refresh();
-
-    lv_obj_t *warn = pq_ui_text(s_page, PQ_TXT_FLASH_WARNING, 0, 292, &pq_font_16,
-                                PQ_COLOR_WARN);
-    s_warn = warn;
-    lv_obj_set_width(warn, LV_PCT(100));
-    lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, 0);
-
-    lv_obj_t *hint = pq_ui_text(s_page, PQ_TXT_HINT_EXPORT, 0, 10, &pq_font_16,
-                                PQ_COLOR_MUTED);
-    lv_obj_set_width(hint, 216);
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(hint, 12, 12);
+    s_bottom = pq_ui_text(s_page, PQ_TXT_HINT_EXPORT, 0, 284, &pq_font_16,
+                          PQ_COLOR_MUTED);
+    lv_obj_set_width(s_bottom, LV_PCT(100));
+    lv_obj_set_style_text_align(s_bottom, LV_TEXT_ALIGN_CENTER, 0);
 }
 
 void report_open(void)
@@ -171,9 +167,9 @@ void report_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             ESP_LOGI(TAG, "  %d. %s: %s %s", i + 1, quest_results_title(i),
                      quest_results_status_text(i), quest_results_detail(i));
         }
-        if (s_warn) {
-            lv_label_set_text(s_warn, PQ_TXT_EXPORTED);
-            lv_obj_set_style_text_color(s_warn, lv_color_hex(PQ_COLOR_OK), 0);
+        if (s_bottom) {
+            lv_label_set_text(s_bottom, PQ_TXT_EXPORTED);
+            lv_obj_set_style_text_color(s_bottom, lv_color_hex(PQ_COLOR_OK), 0);
         }
         bsp_lvgl_unlock();
         return;
