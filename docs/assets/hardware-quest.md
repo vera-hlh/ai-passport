@@ -232,7 +232,7 @@ The default Montserrat 14/20 has no CJK glyphs, and the Source Han Sans SC bundl
 | M3 | report page: RAM + NVS + serial export | done 2026-11-09, verified with a simulated power loss |
 | M4 | focus timer (configurable durations, on-screen countdown, chimes) | passed on device 2026-11-10, see section 15 |
 | M5 | L6–L8 (speaker sweep, microphone recording, loopback) | passed on device 2026-11-12, see section 15 |
-| M6 | Wi-Fi scan, setup, internet probe and file round trip (L9–L10) | passed on device 2026-11-12; BLE skipped by decision |
+| M6 | Wi-Fi scan, setup with captive portal, internet probe and file round trip | passed on device 2026-11-13; BLE skipped by decision |
 | M7 | serial screenshot export and a data partition | data partition done with M6; screenshot export not started |
 
 ## 13. Risks and open questions
@@ -361,6 +361,8 @@ Other decisions and limits:
 - **BLE levels are skipped by decision**; of the two radios only Wi-Fi is exercised by the app;
 - leaving the setup page stops the station link (power), credentials stay in NVS and the page
   shows "last connected to …";
-- the **captive portal is not implemented**, so the page must be opened manually at 192.168.4.1;
+- the **captive portal is implemented and verified on hardware**: DHCP points DNS at the device,
+  a UDP responder answers every A query with the hotspot address, and the system probes of Android,
+  iOS and Windows are redirected to the setup page;
 - after the partition change the merged image still resets NVS (the report), but the `storage`
   partition sits after the app, so **files survive a full reflash**.
